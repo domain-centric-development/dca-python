@@ -40,6 +40,10 @@ base-package = "orders"      # src/orders/<context>/{domain, application, adapte
 experimental = ["DCA-PY-004"]  # or "all"
 ```
 
+A tool that may not depend on the distribution keeps its own copy of the markers and names it:
+`building-blocks = ["orders.building_blocks"]` — the copy then counts as `dca_building_blocks` and is not read as a
+module of the project.
+
 ```python
 # src/orders/billing/__init__.py
 __dca__ = BoundedContext(name="billing")

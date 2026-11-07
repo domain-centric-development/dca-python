@@ -76,6 +76,9 @@ class DcaLayout:
     router_methods: tuple[str, ...] = ROUTER_METHODS
     listener_decorators: tuple[str, ...] = ()
     authorization_decorators: tuple[str, ...] = AUTHORIZATION
+    #: Further modules that count as `dca_building_blocks`, for a project that keeps its own copy of the markers
+    #: (a tool that may not depend on the distribution). They are not read as the project's modules.
+    building_blocks: tuple[str, ...] = ()
     experimental: tuple[str, ...] | typing.Literal["all"] = ()
     disabled: tuple[str, ...] = ()
 

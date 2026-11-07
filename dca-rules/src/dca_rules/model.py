@@ -185,6 +185,8 @@ class Project:
                 if is_package:
                     parts = parts[:-1]
                 dotted = ".".join([self.base, *parts])
+                if self.is_bb(dotted):
+                    continue
                 try:
                     tree = ast.parse(path.read_text(encoding="utf-8"), str(path))
                 except SyntaxError as error:
@@ -334,15 +336,15 @@ class Project:
                 yield item.line, item.module
 
     def is_project(self, dotted: str) -> bool:
-        return dotted == self.base or dotted.startswith(self.base + ".")
+        return (dotted == self.base or dotted.startswith(self.base + ".")) and not self.is_bb(dotted)
 
     @staticmethod
     def is_stdlib(dotted: str) -> bool:
         return dotted.split(".")[0] in STDLIB
 
-    @staticmethod
-    def is_bb(dotted: str) -> bool:
-        return dotted == BB or dotted.startswith(BB + ".")
+    def is_bb(self, dotted: str) -> bool:
+        """The building blocks, or a module the layout names as their copy."""
+        return any(dotted == b or dotted.startswith(b + ".") for b in (BB, *self.layout.building_blocks))
 
     def is_framework(self, dotted: str) -> bool:
         return any(dotted == f or dotted.startswith(f + ".") for f in self.layout.frameworks)

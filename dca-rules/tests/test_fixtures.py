@@ -130,6 +130,17 @@ def test_the_conforming_fixture_places_its_modules() -> None:
     assert project.declared_contexts() == {"alpha": "alpha", "beta": "beta"}
 
 
+def test_a_copy_of_the_markers_the_layout_names_counts_as_the_building_blocks() -> None:
+    project = fixture("own-markers")
+    assert "fx.markers" not in project.modules
+    roles = {name.rsplit(".", 1)[-1]: project.roles(k) for name, k in project.classes.items()}
+    assert "AggregateRoot" in roles["Thing"]
+    assert "Id" in roles["ThingId"] and "Value" in roles["ThingId"]
+    assert "Value" in roles["Label"]
+    assert not findings(project, "DCA-LAY-007")
+    assert not findings(project, "DCA-STR-011")
+
+
 def test_an_experimental_rule_runs_only_when_switched_on(tmp_path: pathlib.Path) -> None:
     source = FIXTURES / "violations"
     layout = DcaLayout.from_pyproject(source / "pyproject.toml")
