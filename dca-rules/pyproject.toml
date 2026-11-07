@@ -13,6 +13,7 @@ pytest = ["pytest>=8"]
 
 [project.urls]
 Homepage = "https://domaincentric.dev"
+Repository = "https://github.com/domain-centric-development/dca-python"
 
 [build-system]
 requires = ["setuptools>=77"]
