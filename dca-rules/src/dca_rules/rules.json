@@ -2326,7 +2326,7 @@
       "title": "An output port is implemented by name",
       "rationale": "A Protocol is structural: an adapter fits a port without naming it, and the rules - which read roles from bases - lose the implementation, and with it the placement rules. A port nobody names is a port the rules cannot follow to its adapter.",
       "selects": "Protocol classes that carry the OutputPort role, and the classes of the outgoing adapters and the composition root.",
-      "checks": "Every port is named among the bases of some class or of a narrower port; no class of the outgoing adapters or the composition root fits a port's methods, by name and parameter names, without naming it - nor the methods of a building block's port (Repository, DomainEventPublisher, TransactionBoundary).",
+      "checks": "Every port is named among the bases of some class or of a narrower port; no class of the outgoing adapters or the composition root that names no output port fits a port's methods, by name and parameter names - nor the methods of a building block's port (Repository, DomainEventPublisher, TransactionBoundary). A class that names a port and fits another one by its shape is held to the port it names.",
       "implementation": "python",
       "status": "enforced",
       "maturity": "experimental",

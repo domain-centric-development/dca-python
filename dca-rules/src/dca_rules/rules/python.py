@@ -99,10 +99,12 @@ def _port_methods(p: Project, port: Klass) -> dict[str, tuple[str, ...]]:
 @rule("DCA-PY-003")
 def py_003(p: Project) -> list[Finding]:
     """An output port is implemented by name: an adapter that fits its shape names it among its bases, and a port
-    has at least one class that does."""
+    has at least one class that does. An adapter that names an output port already is held to that one; another
+    port it happens to fit is a coincidence of shape, not a second implementation."""
     found = []
     ports = [k for k in p.with_role("OutputPort") if k.is_protocol]
     concrete = [k for k in p.classes.values() if not k.is_protocol]
+    named = {k.qualname for k in concrete if any(port.qualname in p.ancestors(k) for port in ports)}
     for port in ports:
         wanted = _port_methods(p, port)
         nominal = [k for k in concrete if port.qualname in p.ancestors(k)]
@@ -111,7 +113,7 @@ def py_003(p: Project) -> list[Finding]:
         if not wanted:
             continue
         for klass in concrete:
-            if klass in nominal or klass.place.layer not in ("outgoing", "root"):
+            if klass.qualname in named or klass.place.layer not in ("outgoing", "root"):
                 continue
             own = {n: _signature(m) for n, m in klass.methods.items()}
             if all(own.get(n) == s for n, s in wanted.items()):

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from dca_building_blocks import DomainEvent, DomainEventPublisher, TransactionBoundary
-from fx.alpha.application.shared import ThingJournal, ThingRepository
+from fx.alpha.application.shared import Tally, ThingJournal, ThingRepository
 from fx.alpha.domain.thing import Thing, ThingId
 from fx.sharedkernel.domain.owner import OwnerId
 
@@ -35,6 +35,14 @@ class ListJournal(ThingJournal):
 
     def count(self) -> int:
         return len(self._entries)
+
+
+class FixedTally(Tally):
+    def count(self) -> int:
+        return 0
+
+
+# ListJournal fits Tally by its shape as well; it names the port it implements, so the fit is a coincidence.
 
 
 class ListPublisher(DomainEventPublisher):

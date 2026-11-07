@@ -17,6 +17,10 @@ class ThingJournal(Store, Protocol):
     def count(self) -> int: ...
 
 
+class Tally(Store, Protocol):
+    def count(self) -> int: ...
+
+
 class BetaLookup(Store, Protocol):
     def known(self, thing_id: ThingId, /) -> bool: ...
 
