@@ -1,0 +1,4 @@
+# No context declared, no module in a layer: DCA-STR-011, DCA-STR-012. Read, never run.
+[tool.dca]
+base-package = "fx"
+experimental = "all"

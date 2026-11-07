@@ -1,0 +1,32 @@
+# docker compose run --rm test       → pytest against the mounted checkout
+# docker compose run --rm build      → wheels and sdists of both distributions into dist/
+# docker compose --profile ci build  → CI-style check: the image builds only if everything is green
+# podman-compose does not activate a service's profile on `run`: `podman-compose --profile tools run --rm test`.
+x-uv: &uv
+  image: ghcr.io/astral-sh/uv:0.9-python3.12-bookworm-slim
+  profiles: [tools]
+  working_dir: /workspace
+  volumes:
+    - .:/workspace
+    - uv-cache:/root/.cache/uv
+  environment:
+    UV_PROJECT_ENVIRONMENT: /tmp/venv
+
+services:
+  test:
+    <<: *uv
+    entrypoint: ["uv", "run"]
+    command: ["pytest", "-q"]
+
+  build:
+    <<: *uv
+    entrypoint: ["uv"]
+    command: ["build", "--all-packages", "-o", "dist"]
+
+  check:
+    build: .
+    image: dca-python
+    profiles: [ci]
+
+volumes:
+  uv-cache:

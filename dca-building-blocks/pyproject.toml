@@ -1,0 +1,18 @@
+[project]
+name = "dca-building-blocks"
+version = "0.0.0"
+description = "Building blocks of Domain-Centric Architecture for Python: the marker classes of DDD's tactical patterns and of ports and adapters. Standard library only."
+license = "MIT"
+authors = [{ name = "Christoph Bloemer" }]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.urls]
+Homepage = "https://domaincentric.dev"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+dca_building_blocks = ["py.typed"]

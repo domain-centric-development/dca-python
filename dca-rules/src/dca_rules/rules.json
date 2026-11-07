@@ -1,0 +1,2406 @@
+{
+  "library": "dca-python",
+  "version": "0.0.0",
+  "layout": {
+    "declaration": "[tool.dca] in pyproject.toml; a context: __dca__ = BoundedContext(...) in its __init__.py",
+    "layers": [
+      "domain",
+      "application",
+      "adapter.incoming",
+      "adapter.outgoing",
+      "infrastructure",
+      "api"
+    ],
+    "applicationShared": "shared",
+    "adapterModules": {
+      "incoming": "adapter.incoming",
+      "outgoing": "adapter.outgoing",
+      "event": "event",
+      "web": "web"
+    },
+    "apiModules": {
+      "api": "api",
+      "events": "api.events"
+    },
+    "sharedKernel": "sharedkernel",
+    "compositionRoot": "infrastructure"
+  },
+  "retired": [
+    {
+      "id": "DCA-ADV-003",
+      "reason": "Immutable event shape is checked by DCA-ADV-001",
+      "replacement": "DCA-ADV-001",
+      "since": "0.4.0"
+    },
+    {
+      "id": "DCA-ADV-009",
+      "reason": "Where a domain service sits inside the domain layer is the team's decision; DCA-ADV-010 keeps the layer itself",
+      "replacement": "DCA-ADV-010",
+      "since": "0.5.0"
+    },
+    {
+      "id": "DCA-HEX-015",
+      "reason": "Keeping no state for a later request in one instance is an operational requirement - several instances without sticky sessions - that a project chooses, not architecture every application shares; the pattern stays guide and catalog guidance for applications that run that way",
+      "replacement": "none",
+      "since": "0.9.0"
+    },
+    {
+      "id": "DCA-MAP-003",
+      "reason": "Renderer disambiguates normalized external-system identifiers",
+      "replacement": "ContextMapRenderer",
+      "since": "0.4.0"
+    },
+    {
+      "id": "DCA-STR-009",
+      "reason": "A separate segment for the anti-corruption layer is a filing decision, and the selection named three suffixes a project cannot change; the pattern stays guide and catalog guidance",
+      "replacement": "none",
+      "since": "0.5.0"
+    },
+    {
+      "id": "DCA-TAC-022",
+      "reason": "Selected on the sample's own pattern name (Enriched*), which a general rule may not carry; value models are covered by DCA-TAC-008..012 and naming one enriched remains guide and catalog guidance",
+      "replacement": "DCA-TAC-008..012",
+      "since": "0.4.0"
+    }
+  ],
+  "rules": [
+    {
+      "set": "layered",
+      "id": "DCA-LAY-001",
+      "title": "Diagnostic: The rules of the Layered Architecture should be followed",
+      "rationale": "Traditional layering (application accessed only by incoming adapters) contradicts Ports and Adapters, where outgoing adapters implement application-level output ports; the hexagonal rules cover the intended dependency direction",
+      "selects": "Informational - selects nothing.",
+      "checks": "Informational - carries doctrine only. The dependency direction is held by the import rules.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [],
+      "implemented": true
+    },
+    {
+      "set": "layered",
+      "id": "DCA-LAY-002",
+      "title": "Domain must not have dependencies on Infrastructure",
+      "rationale": "Domain should not depend on infrastructure concerns (Dependency Inversion Principle)",
+      "selects": "Every module in a domain package, the shared kernel's included.",
+      "checks": "It imports no module of a context's infrastructure package nor of the composition root.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "layered",
+      "id": "DCA-LAY-003",
+      "title": "Application Services must only use outbound ports (not infrastructure implementations)",
+      "rationale": "Application services should only use outbound ports declared as interfaces (port.out), not infrastructure implementation details",
+      "selects": "Every module in an application package.",
+      "checks": "It imports no module of a context's infrastructure package or of the composition root, and no module of a configured framework; it reaches them through its output ports.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "layered",
+      "id": "DCA-LAY-004",
+      "title": "Transaction boundaries belong to the application layer",
+      "rationale": "Transactions are an application-layer concern - domain and incoming adapters must not manage them",
+      "selects": "Modules in a domain package or an incoming adapter.",
+      "checks": "None names the building block TransactionBoundary or declares a transaction with a framework decorator (transaction.atomic, ...). Python has no declarative transaction on a use case in DCA's reading: the boundary is the explicit port, held by the application.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "layered",
+      "id": "DCA-LAY-005",
+      "status": "n/a",
+      "reason": "dca_building_blocks is a regular package installed as a distribution; a project cannot add a module to it, so its port module holds what the library declares and nothing else."
+    },
+    {
+      "set": "layered",
+      "id": "DCA-LAY-007",
+      "title": "Diagnostic: classes of a module that sit in no layer",
+      "rationale": "Every rule written for a layer selects by the layer a class is placed in. A class of a module that sits in none - a mapper or a persistence entity beside the adapter packages, a class whose layer is declared only on its neighbour - is seen by none of them",
+      "selects": "Every module below the base package.",
+      "checks": "Informational - lists every module that sits in no layer (outside domain, application, adapter, infrastructure, api of a context, the shared kernel and the composition root), and never fails.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "onion",
+      "id": "DCA-ONI-001",
+      "title": "Domain must not access Application Services (Onion Architecture - Domain is innermost layer)",
+      "rationale": "Domain is the innermost layer in onion architecture and should not depend on application services",
+      "selects": "Every module in a domain package.",
+      "checks": "It imports no module of an application package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "onion",
+      "id": "DCA-ONI-002",
+      "title": "The Domain Model should be framework independent and should not use 3rd party libraries when possible",
+      "rationale": "Domain should be framework-independent (Dependency Inversion Principle)",
+      "selects": "Every module in a domain package, the shared kernel's included.",
+      "checks": "It imports the standard library, the building blocks, the project's own modules and the configured allowed-in-domain libraries only. A per-directory ruff.toml with banned-api holds the same while editing.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports",
+        "ruff"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "onion",
+      "id": "DCA-ONI-003",
+      "title": "Domain models must not carry prohibited framework decorators, bases or field metadata",
+      "rationale": "Domain objects carry no metadata for container management, persistence or transaction coordination",
+      "selects": "Classes in a domain package.",
+      "checks": "No decorator, no base and no field default (Field(...), Column(...)) comes from a configured framework (django, fastapi, flask, litestar, marshmallow, pydantic, sqlalchemy, sqlmodel, starlette by default).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-001",
+      "title": "Classes from the domain should not access port adapters",
+      "rationale": "Domain should not depend on adapters (ports and adapters pattern)",
+      "selects": "Every module in a domain package.",
+      "checks": "It imports no module of an adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-002",
+      "title": "Application Services should not access port adapters",
+      "rationale": "Application services should only depend on domain and outbound ports, not adapters",
+      "selects": "Every module in an application package.",
+      "checks": "It imports no module of an adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-003",
+      "title": "Controllers and Resources must never access repositories directly",
+      "rationale": "Controllers must go through use cases (input ports), never directly to repositories",
+      "selects": "Modules in an incoming adapter package.",
+      "checks": "None names a class that carries the Repository role, protocol or implementation.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-004",
+      "title": "Incoming Adapters must only use outbound ports (not infrastructure implementations)",
+      "rationale": "Incoming adapters should only use outbound ports declared as interfaces (port.out), not infrastructure implementation details",
+      "selects": "Modules in an incoming adapter package.",
+      "checks": "None imports a module of a context's infrastructure package or of the composition root.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-005",
+      "title": "Outgoing adapters must not use another module's infrastructure",
+      "rationale": "Technical infrastructure reuse preserves module isolation",
+      "selects": "Modules in an outgoing adapter package.",
+      "checks": "None imports the infrastructure package of another context.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-006",
+      "title": "Incoming port adapters must not depend directly on outgoing port adapters within the same context",
+      "rationale": "Port adapters should communicate through application services, not directly (event consumers are the exception)",
+      "selects": "Modules in an incoming adapter package, the event consumers excluded.",
+      "checks": "None imports a module of the outgoing adapters of the same context.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-007",
+      "title": "Incoming adapters depend on no other module, except event consumers on the events they subscribe to",
+      "rationale": "An incoming adapter drives its own module only: a controller that needs a sibling's data goes through its own use case, output port and outgoing adapter to the sibling's published api - only a subscription legitimately meets a foreign contract on the incoming side",
+      "selects": "Modules in an incoming adapter package.",
+      "checks": "None imports a module of another context; an event consumer may import that context's api.events.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-008",
+      "title": "Classes named *Repository must reside in the outgoing adapter package (name-based discovery of unmarked repositories)",
+      "rationale": "Repository implementations are secondary adapters (outgoing ports)",
+      "selects": "Classes, protocols excluded, whose name ends with Repository.",
+      "checks": "Each sits in an outgoing adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-009",
+      "title": "Output Ports in application.shared must extend OutputPort",
+      "rationale": "Top-level interfaces in application.shared are output ports and must extend OutputPort to be part of the port hierarchy. Nested interfaces (e.g. IdentityProvider.Identity) are part of their enclosing port's contract, not ports themselves",
+      "selects": "Protocol classes in an application's shared package.",
+      "checks": "Each carries the OutputPort role, through OutputPort, Repository, Store or a publisher.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-010",
+      "title": "Output ports must not reside in the domain layer",
+      "rationale": "output ports (Repository, Store, OutputPort) are an application-layer concern and must live in application/shared/, not domain/",
+      "selects": "Protocol classes that carry the OutputPort role.",
+      "checks": "None sits in a domain package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-011",
+      "title": "Incoming Adapters must depend on input port interfaces, not on use case classes",
+      "rationale": "A driving adapter drives the application through its port. Injecting the concrete implementation instead couples the adapter to one realisation of the use case, defeats the Dependency Inversion Principle the port exists for, and makes the adapter untestable without the real use case and everything it depends on",
+      "selects": "Modules in an incoming adapter package.",
+      "checks": "None names a use case - a class, no protocol, that carries the InputPort role; naming the input port protocol is what the rule expects.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-012",
+      "title": "Incoming Adapters must not depend on domain services",
+      "rationale": "An incoming adapter translates external input, calls an input port and formats its result. Injecting or invoking a domain service bypasses the application boundary; the use case owns that collaboration and puts its outcome into the result. Outgoing adapters are outside this rule - repositories and other driven adapters may construct or reconstitute domain objects while implementing output ports",
+      "selects": "Modules in an incoming adapter package.",
+      "checks": "None names a class that carries the DomainService role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-013",
+      "title": "Outgoing Adapters must not depend on input ports",
+      "rationale": "An outgoing adapter is driven: the application calls it through an output port. One that calls an input port drives the application instead - it is an incoming adapter filed on the wrong side, and the call it makes runs a second use case from inside the first one's outgoing edge",
+      "selects": "Modules in an outgoing adapter package.",
+      "checks": "None names a class or protocol that carries the InputPort role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-014",
+      "title": "GET handlers must not drive an input port that takes a command",
+      "rationale": "A state-changing use case is reached only by an unsafe HTTP method, never by GET. Links, prefetching, crawlers and cross-site navigation issue GET requests on their own; a GET that runs a command changes state nobody asked to change. A handler that names no HTTP method answers GET as well",
+      "selects": "Handler functions a router decorator registers for GET: <router>.get(\"/path\") or route/api_route with methods containing GET (FastAPI, Flask, Litestar style).",
+      "checks": "No such function constructs a class whose name ends with Command.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-016",
+      "title": "Diagnostic: adapters that publish an enum by its member name",
+      "rationale": "A value an adapter publishes from an enum is spelled explicitly - a code per value on the enum or a mapping in the adapter - never derived from the member's name. Renaming a member is a refactoring inside the code and must not change what a client reads",
+      "selects": "Modules in an adapter package.",
+      "checks": "Informational - lists every <Enum>.<MEMBER>.name of an enum declared in a domain or application package, and never fails. A member read through a variable is not seen.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "experimental",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-017",
+      "title": "Event listeners that drive an input port must run after the commit in their own transaction",
+      "rationale": "A reaction to an event changes state or performs an external effect through a use case. Run inside the transaction that raised the event, it changes a second aggregate in the first one's transaction, a failure in the reaction rolls back the fact that caused it, and a retry of the request runs the reaction again. A listener that only translates or measures calls output ports and may run in that transaction",
+      "selects": "Functions registered as event listener by the configured listener decorators.",
+      "checks": "A listener that calls an input port runs after the commit in its own transaction, as the preset expresses it. Python has no common listener decorator; without a preset nothing is selected.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": false
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-018",
+      "title": "Controllers must reside in an incoming adapter package",
+      "rationale": "A controller turns a request into a command or a query and is an incoming adapter. Outside the incoming adapter packages it is outside the selection of every rule written for incoming adapters - the GET-handler rule, the controller naming rules, the boundary rules - and passes them all",
+      "selects": "Functions a router decorator registers (<router>.<method>(\"/path\", ...)), anywhere below the base package.",
+      "checks": "Each sits in an incoming adapter package. Python handlers are functions, not classes.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-019",
+      "title": "Output port implementations are placed in the outgoing adapters",
+      "rationale": "An output port is what the application needs from outside; whatever implements it is an outgoing adapter - the implemented port says so. An implementation placed in the infrastructure package, the application, the domain or in no layer at all is outside the selection of every rule written for outgoing adapters, and infrastructure then holds behaviour instead of wiring alone",
+      "selects": "Classes, protocols excluded, that carry the OutputPort role but neither Repository nor Store.",
+      "checks": "Each sits in an outgoing adapter package; in the composition root only a bridge that drives an input port.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "hexagonal",
+      "id": "DCA-HEX-020",
+      "title": "Diagnostic: incoming adapters that read the caller's roles in their own code",
+      "rationale": "A check that reads nothing but the caller's roles or claims - is this caller staff? - is a property of the exposure and is declared on the route, with the framework's authorization annotation, where a reader of the route sees it and the framework answers an unauthenticated and an unauthorized caller apart. A branch on the caller's roles inside the adapter's code hides the gate and renders whatever status the branch writes. A check that needs the stored data - is this yours? - is not claims-only and belongs to the use case",
+      "selects": "Modules in an incoming adapter package. Nothing is selected when the configured authorization forms ([tool.dca] authorization-decorators) are empty.",
+      "checks": "Informational - lists every call of a method that asks whether the caller holds a role or a permission - has_role, has_any_role, has_authority, has_any_authority, is_in_role, is_user_in_role, has_perm, has_perms - on any owner, and never fails. The declared forms are a decorator (Django's permission_required, Flask-Login's login_required) or a parameter default (FastAPI's Security); a role compared by the adapter itself or a helper of the project's own is not seen.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "experimental",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-001",
+      "title": "Aggregate Roots must implement AggregateRoot<T, ID>",
+      "rationale": "Classes named *AggregateRoot must implement AggregateRoot interface (DDD pattern)",
+      "selects": "Classes in a domain package whose name ends with AggregateRoot.",
+      "checks": "The class carries the AggregateRoot role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-002",
+      "title": "Aggregate Roots must not hold references to Repositories or other Output Ports",
+      "rationale": "Aggregates are persistence-ignorant: use cases retrieve facts; external calculations belong in domain services over supplied snapshots. Review callback parameters manually; this field check cannot prove semantic responsibility",
+      "selects": "Classes that carry the AggregateRoot role.",
+      "checks": "No field annotation, generic arguments included, names a class with the OutputPort role or a port building block.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-003",
+      "title": "Aggregate Roots must not have fields with other Aggregate Root types",
+      "rationale": "Vernon's Aggregate Design Rule #3: reference other Aggregates by identity to keep aggregate boundaries and transactional consistency intact",
+      "selects": "Classes that carry the AggregateRoot role.",
+      "checks": "No field annotation, through generic arguments, names another class with the AggregateRoot role. Fields are class-level annotations and the self.<name> assignments of __init__, typed by their annotation or by the parameter assigned.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-004",
+      "title": "Entities must have an ID field",
+      "rationale": "An Entity is defined by its identity, which is a value object implementing the Id marker",
+      "selects": "Classes, protocols excluded and the most derived only, that carry the Entity role.",
+      "checks": "Entity declares id as an abstract property, so an entity without it cannot be built and the type checker refuses it; the source test checks that a field, its own or a base's, holds a class with the Id role, so the identity is state, not computed.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "mypy",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-005",
+      "title": "Entities must not be instantiated directly from outside the aggregate",
+      "rationale": "Entities are created through their aggregate root so that the root can enforce its invariants",
+      "selects": "Every call of a class that carries the Entity role but not AggregateRoot.",
+      "checks": "It happens in a domain module of the entity's own context. Python has no package-private constructor; the call site is what the rule reads.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-006",
+      "title": "Domain model classes must not have public setter methods",
+      "rationale": "Behavior-rich domain models change state through intention-revealing methods from the ubiquitous language, never through public setters",
+      "selects": "Classes that carry the Entity or Value role.",
+      "checks": "No method named set_<name> takes exactly one parameter, and no property has a setter.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-007",
+      "title": "Entities must not have fields with Aggregate Root types",
+      "rationale": "An entity inside an aggregate references other aggregates by identity only, otherwise the aggregate boundary leaks",
+      "selects": "Classes that carry the Entity role but not AggregateRoot.",
+      "checks": "No field annotation, through generic arguments, names a class with the AggregateRoot role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-008",
+      "title": "Value Objects must not contain Aggregate Roots or Entities",
+      "rationale": "A Value Object is defined by its attributes; holding an object with identity would give it a lifecycle it must not have",
+      "selects": "Classes that carry the Value role.",
+      "checks": "No field annotation, through generic arguments, names a class with the Entity role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-009",
+      "title": "Value Objects must not be extended",
+      "rationale": "Value objects should be immutable (final classes) - Vernon's DDD recommendation",
+      "selects": "Every class of the project.",
+      "checks": "None names a concrete value - a class with the Value role that declares fields - among its bases. Python has no final class at runtime; typing.final is the type checker's view of the same.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-010",
+      "title": "Value Objects must not mutate their state",
+      "rationale": "Records have implicitly final fields and enums are immutable by design; a hand-written value class must make every instance field final itself",
+      "selects": "Classes that carry the Value role.",
+      "checks": "The base makes every value a frozen dataclass, so an assignment to a field raises. The source test refuses a field typed as a mutable collection (list, dict, set, ...) and a method other than __init__/__post_init__ that assigns to self or calls object.__setattr__.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "runtime",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-011",
+      "title": "Value Objects must not have setter methods",
+      "rationale": "Value Objects are immutable; state changes produce a new instance instead of mutating",
+      "selects": "Classes that carry the Value role.",
+      "checks": "No method is named set_<name>.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-012",
+      "title": "Value Objects must be records or immutable classes with attribute equality",
+      "rationale": "A record grants attribute-based equality for free; a hand-written Value Object class must override equals and hashCode itself to compare by its attributes",
+      "selects": "Classes that carry the Value role.",
+      "checks": "The base makes every value a dataclass with attribute equality. The source test refuses an __eq__ of its own and a dataclass decorator with eq=False.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "runtime",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-013",
+      "title": "Repository Interfaces should extend Repository Marker Interface",
+      "rationale": "Repository interfaces should extend Repository marker interface",
+      "selects": "Classes in an application package whose name ends with Repository.",
+      "checks": "The class carries the Repository role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-014",
+      "title": "Repository interfaces must reside in the application layer (local to a use case or shared)",
+      "rationale": "Repository interfaces are output ports in the application layer (Hexagonal Architecture)",
+      "selects": "Protocol classes that carry the Repository role.",
+      "checks": "Each sits in an application package, the shared kernel's included.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-015",
+      "title": "Repository Implementations must reside in adapter.outgoing package",
+      "rationale": "Repository implementations are outgoing adapters in bounded contexts",
+      "selects": "Classes, protocols excluded, that carry the Repository role.",
+      "checks": "Each sits in an outgoing adapter package. A role is nominal: an implementation names its port among its bases (DCA-PY-003).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-016",
+      "title": "Repositories must only exist for Aggregate Roots",
+      "rationale": "A repository is the collection of one aggregate type; a repository for an entity would let callers bypass the root that guards the aggregate's invariants",
+      "selects": "Protocol classes that carry the Repository role through Repository[A, K].",
+      "checks": "The bound A: AggregateRoot makes a repository for anything else a type error. The source test checks the first type argument: a class with the AggregateRoot role, and the port named after it plus Repository.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "type-checker",
+      "enforcement": [
+        "mypy",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-017",
+      "title": "Repository methods must not return non-root Entities",
+      "rationale": "A caller receiving an Entity that is not an Aggregate Root could mutate part of an aggregate without passing its root, so the root's invariants would never run",
+      "selects": "Protocol classes that carry the Repository role.",
+      "checks": "No method's return annotation names a class with the Entity role but not AggregateRoot.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-018",
+      "title": "Store interfaces must extend the Store marker, not Repository",
+      "rationale": "Stores extend the Store marker; Repository is reserved for Aggregate Roots",
+      "selects": "Protocol classes outside adapter and infrastructure packages whose name ends with Store.",
+      "checks": "The class carries the Store role and not the Repository role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-019",
+      "title": "Store interfaces must reside in the application layer (local to a use case or shared)",
+      "rationale": "Store interfaces are output ports in the application layer (Hexagonal Architecture)",
+      "selects": "Protocol classes that carry the Store role.",
+      "checks": "Each sits in an application package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-020",
+      "title": "Store implementations must reside in the adapter.outgoing package",
+      "rationale": "Store implementations are outgoing adapters in bounded contexts",
+      "selects": "Classes, protocols excluded, that carry the Store role.",
+      "checks": "Each sits in an outgoing adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-021",
+      "title": "Store interfaces must not declare save or delete methods",
+      "rationale": "save/delete are Repository semantics; a Store that has them is a Repository wearing the wrong name, and the stored object should then be an Aggregate Root",
+      "selects": "Protocol classes that carry the Store role.",
+      "checks": "No method declared on the protocol itself is named save, delete or delete_by_id.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-023",
+      "title": "Aggregate Roots are built through their own class methods",
+      "rationale": "An aggregate comes into being in two ways - created as a business fact or reconstituted from storage - and each is a named factory method. A public constructor is a third, unnamed way that skips the creation invariants and the event creation raises",
+      "selects": "Every call of a class that carries the AggregateRoot role.",
+      "checks": "It happens in the module that declares the root - its class methods (create, restore, ...) build it and check its invariants. Python has no private constructor; the call site is what the rule reads.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-024",
+      "title": "Value Objects must not declare a neutral factory beside an origin factory with the same parameters",
+      "rationale": "A value built from input and a value rebuilt from storage are two origins with different checks - validated and derived on the way in, taken as given on the way back - and each has its own named factory. A second factory that takes the same parameters, such as a neutral of(...) beside them, leaves the caller to guess which checks run",
+      "selects": "Class methods of classes that carry the Value role.",
+      "checks": "No neutral factory (of, new, create, value_of, make) takes the same parameter types, in the same order, as another class method. Two named origins (from_input, from_stored) pass.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-025",
+      "title": "Domain types must not hold bare primitives, strings or time types; a boolean only as a field or a predicate",
+      "rationale": "A value with rules of its own - a postal code, a quantity, a moment, an identifier - is a value object; held as a bare String, int, Instant or UUID its validation is repeated at every use or missing. A value object with several components holds value objects too; only a wrapper - a value of exactly one component - holds the primitive it wraps. A single yes/no fact may stay a boolean field: the type is told (complete()) and answers (isCompleted()). A boolean parameter is a flag argument - setCompleted(true) lets the caller set the state instead of triggering the behaviour - and three or more states, or transitions with rules, are an enum or a value",
+      "selects": "Classes in a domain package, the shared kernel's included. Not selected: a value or id whose one field is value, exceptions, enums.",
+      "checks": "No field, parameter of a public method or return annotation names str, int, float, bytes, complex, a datetime type, timedelta or uuid.UUID. A private bool field - a single yes/no fact - and a bool return - a predicate - pass; a bool parameter and a public bool field do not.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "tactical",
+      "id": "DCA-TAC-026",
+      "title": "The repository of an owned aggregate declares a lookup by the aggregate's id and the owner's id",
+      "rationale": "An object loaded by its id alone is reachable by anyone who knows or guesses the id - the insecure direct object reference of broken access control (OWASP Top 10, A01). An aggregate marked as owned belongs to someone; its repository offers a lookup scoped to the owner, so a use case acting for a caller can load it through the caller and an unscoped lookup is never the only way in. Whether the use case calls the scoped lookup, and whether it proved the caller's right to a change of owner, is logic the rule does not see",
+      "selects": "The repository protocols that bind a class with both the Owned and the AggregateRoot role as the first type argument of Repository[A, K] (or of a narrower port).",
+      "checks": "The owner id type is the type argument of Owned[...] among the aggregate's bases; a bare Owned is reported. At least one method of the repository, inherited protocol methods included, takes a parameter annotated with the aggregate's id type (K, or else the return of its id property) and one annotated with the owner id type, in either position, and returns an annotation that names the aggregate (itself, Optional, a list ...). A method answering bool does not count. Whether a use case calls the scoped lookup is not checked.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-001",
+      "title": "Diagnostic: Display discovered bounded contexts",
+      "rationale": "Making the discovered contexts visible shows which packages the strategic rules govern",
+      "selects": "Every context package and the shared kernel.",
+      "checks": "Informational - lists each context with its declared name and module count, and never fails.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-002",
+      "title": "Shared Kernel must not have dependencies on any bounded context",
+      "rationale": "Shared Kernel must be context-independent — it is shared by all contexts and owned by none",
+      "selects": "Every module of the shared kernel.",
+      "checks": "It imports no module of a context.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-003",
+      "title": "Modules must not access each other in the application layer",
+      "rationale": "An application layer talks to other modules through its own output ports, implemented by adapters - never directly. Selects structurally over every module that owns a DCA layer, declared as a bounded context or not: an undeclared module must not be able to escape isolation by staying off the context map",
+      "selects": "Every module in a context's application package.",
+      "checks": "It imports no module of another context, that context's api included; another context is reached through an output port.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-004",
+      "title": "Modules must not access each other in the domain layer",
+      "rationale": "A domain layer talks to its own module and the shared kernel, nothing else - not even another module's api/. Selects structurally over every module that owns a DCA layer, declared as a bounded context or not",
+      "selects": "Every module in a context's domain package.",
+      "checks": "It imports no module of another context, that context's api included.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-005",
+      "title": "Open Host Services must be published: in the api package or as an incoming adapter",
+      "rationale": "An Open Host Service is the protocol a context publishes for other contexts - in-process as its api/ package, over the network as an incoming adapter (REST, gRPC, MCP). It belongs at the context boundary, never in the domain or application layer; the adapter's sub-package is irrelevant",
+      "selects": "Classes that carry the OpenHostService role.",
+      "checks": "Each sits in an api package or in an incoming adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-006",
+      "title": "Outgoing adapters accessing other modules must only use their published api/ and events/ packages",
+      "rationale": "Cross-module communication goes through the target's published api/ (synchronous) and events/ (asynchronous) packages - DCA's in-process contract convention, package names rather than framework annotations - never through its domain, application, adapter or infrastructure packages. Selects structurally over every module that owns a DCA layer, declared as a bounded context or not",
+      "selects": "Every module in a context's adapter packages.",
+      "checks": "An import of another context names that context's api (or api.events) only.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-007",
+      "title": "Integration event contracts reside in the configured events segment",
+      "rationale": "Integration contracts are published separately from translators and transport adapters",
+      "selects": "Classes that carry the IntegrationEvent role.",
+      "checks": "Each sits in an api.events package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-008",
+      "title": "Integration Events should have immutable shape",
+      "rationale": "An integration event is a published contract: once another context has read it, its shape may only grow, never change under an existing reader. A mutable event cannot make that promise - any holder can rewrite what a second consumer will read",
+      "selects": "Classes that carry the IntegrationEvent role.",
+      "checks": "The base makes every integration event a frozen dataclass; the source test refuses a mutable collection field and a method that assigns to self.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "runtime",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-010",
+      "title": "Diagnostic: Event Listeners consuming integration events should use Anti-Corruption Layer",
+      "rationale": "Consumed integration events are translated into the consuming context's own language before they reach its domain — verified by code review, not statically",
+      "selects": "Informational - selects nothing.",
+      "checks": "Nothing is asserted. Whether a consumed integration event is translated before it reaches the domain is a review check.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-011",
+      "title": "At least one bounded context is declared",
+      "rationale": "Without a declared context the context-map and isolation rules select nothing and report success over an empty model",
+      "selects": "The packages directly below the base package.",
+      "checks": "At least one declares __dca__ = BoundedContext(...) in its __init__.py.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-012",
+      "title": "At least one module owns a DCA layer",
+      "rationale": "Without a discovered module root every rule that selects over the layers matches nothing and reports success over an empty model",
+      "selects": "Every module below the base package.",
+      "checks": "At least one sits in a DCA layer.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "strategic",
+      "id": "DCA-STR-013",
+      "title": "Interfaces in a module's events package must extend IntegrationEvent",
+      "rationale": "Everything in the events package is a published event contract. An interface there is one a producer's integration event implements and a consumer receives; delivery is at least once, so the consumer needs the event's identity and occurrence time through that interface, not only the payload",
+      "selects": "Classes in an api.events package, enums excluded.",
+      "checks": "Each carries the IntegrationEvent role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-001",
+      "title": "Upstream, ExternalUpstream, and Partnership may only be declared on bounded context packages",
+      "rationale": "Context map declarations are reserved for bounded contexts — only a context can be downstream of, or partner with, another",
+      "selects": "Every call of the building blocks Upstream, ExternalUpstream and Partnership.",
+      "checks": "It sits in the __init__.py of a package that declares a bounded context.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-002",
+      "title": "ExternalUpstream declarations must be well-formed and unique per name and interaction",
+      "rationale": "The identity of an @ExternalUpstream declaration is (name, interaction); internal contexts are declared with @Upstream instead",
+      "selects": "Every ExternalUpstream of a context's declaration.",
+      "checks": "name is not blank and not a context's name, and (name, interaction) occurs once per context.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-004",
+      "title": "Upstream declarations must reference an existing bounded context and never the declaring context itself",
+      "rationale": "A dangling or self-referencing upstream edge describes a relationship that cannot exist",
+      "selects": "Every Upstream of a context's declaration.",
+      "checks": "context names a declared context and not the declaring one.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-005",
+      "title": "Upstream declarations must be unique per context and channel, and via must not be empty",
+      "rationale": "The identity of an @Upstream declaration is (context, via); different translations per channel require separate annotations",
+      "selects": "Every Upstream of a context's declaration.",
+      "checks": "via holds at least one channel, and (context, channel) occurs once per context.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-006",
+      "status": "n/a",
+      "reason": "Python has no second module declaration (no Spring Modulith allowedDependencies, no Cargo.toml per context): __dca__ is the only one, and DCA-MAP-007/011 compare it with the imports."
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-007",
+      "title": "Implemented Upstream declarations must be backed by an actual code dependency",
+      "rationale": "A declared IMPLEMENTED edge without any real dependency is stale (or premature — then it is PLANNED) and would otherwise pass forever alongside an equally stale module boundary entry",
+      "selects": "Every implemented Upstream of a context's declaration.",
+      "checks": "For each channel, a module of the declaring context imports the target's api (api channel) or api.events (events channel).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source",
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-008",
+      "title": "Anti-Corruption Layer: upstream contract types must stay inside the matching adapter",
+      "rationale": "The ACL sits where the dependency crosses the boundary — outgoing adapters for synchronous API calls, incoming adapters for consumed events — and translates the upstream contract into the context's own model there",
+      "selects": "Imports into another context's api by a context that declares it with Translation.ANTI_CORRUPTION_LAYER.",
+      "checks": "The api channel is imported only by the outgoing adapters, the events channel only by the incoming adapters.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-009",
+      "title": "Conformist: upstream contract types must never reach the domain layer",
+      "rationale": "Conformism does not suspend domain purity — the domain layer stays free of foreign contract types",
+      "selects": "Imports into another context's api by a context that declares it with Translation.CONFORMIST.",
+      "checks": "None comes from a domain module.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-010",
+      "title": "External system contract types must respect the declared translation and interaction",
+      "rationale": "An external system's contract types are confined to the adapter where the exchange crosses the boundary (ACL) or at least kept out of the domain (Conformist)",
+      "selects": "Imports of the contract_packages an ExternalUpstream names.",
+      "checks": "With an anti-corruption layer only the matching adapter imports them (outgoing for OUTBOUND, incoming for INBOUND); with conformist, no domain module does.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-011",
+      "title": "Cross-context dependencies on published interfaces require an Upstream declaration",
+      "rationale": "Every real dependency on a foreign api/ or events/ package is a context-map edge and must be declared as such",
+      "selects": "Every import of a context's module into another context's api or api.events.",
+      "checks": "The importing context declares an Upstream for that context with that channel in via.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-012",
+      "title": "Partnership declarations must reference an existing bounded context, never themselves, and must be symmetric",
+      "rationale": "A partnership is a mutual commitment — it exists only when both contexts declare it",
+      "selects": "Every Partnership of a context's declaration.",
+      "checks": "It names a declared context other than itself, and that context declares the partnership back.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-013",
+      "title": "Diagnostic: Display declared context map",
+      "rationale": "Printing the declared edges makes the executable context map reviewable at a glance",
+      "selects": "Every Upstream, ExternalUpstream and Partnership.",
+      "checks": "Informational - lists every declared edge and never fails.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "contextmap",
+      "id": "DCA-MAP-014",
+      "status": "n/a",
+      "reason": "Python has no module declaration with allowed dependencies besides __dca__; DCA-MAP-007 already requires every declared edge to be backed by an import."
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-001",
+      "title": "Domain Events must implement DomainEvent and have immutable shape",
+      "rationale": "Domain events should have immutable state implementing DomainEvent (named in past tense, e.g., ProductCreated, CartCleared)",
+      "selects": "Classes in a domain package whose name ends with Event, and classes that carry the DomainEvent role.",
+      "checks": "A class named an event carries the DomainEvent role; an event is a frozen dataclass by its base, holds no mutable collection and no method assigns to self.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "runtime",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-002",
+      "title": "Domain Events must reside in domain package",
+      "rationale": "Domain events are part of the domain layer (named in past tense)",
+      "selects": "Classes that carry the DomainEvent role.",
+      "checks": "Each sits in a domain package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-004",
+      "title": "Domain events must not carry prohibited framework metadata",
+      "rationale": "Domain objects carry no metadata for container management, persistence or transaction coordination",
+      "selects": "Classes in a domain package that carry the DomainEvent role.",
+      "checks": "No decorator, no base and no field default (Field(...), Column(...)) comes from a configured framework (django, fastapi, flask, litestar, marshmallow, pydantic, sqlalchemy, sqlmodel, starlette by default).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-005",
+      "title": "Integration Events must name their event type",
+      "rationale": "@IntegrationEventType(name, version) is the contract identity of every integration event — the serializer keys (name, version) to the class and stamps both onto the wire envelope",
+      "selects": "The most derived classes that carry the IntegrationEvent role.",
+      "checks": "The class statement passes event_type (and version) as class keywords; the base refuses a class without it when the module is imported. Python has no annotations on a class; the keywords are the metadata.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "runtime",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-006",
+      "title": "Integration events carry the schema version in their type metadata, not in the payload",
+      "rationale": "The schema version is a class property (@IntegrationEventType), never per-instance payload data — an explicit schema-version data field duplicates the annotation and can drift from it",
+      "selects": "Classes that carry the IntegrationEvent role.",
+      "checks": "No field is named schema_version, event_version or contract_version.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-007",
+      "title": "Domain events that are not integration events carry no schema version",
+      "rationale": "Versioning is a contract concern of integration events — a purely internal domain event has no wire contract to version",
+      "selects": "Classes that carry the DomainEvent role but not IntegrationEvent.",
+      "checks": "No field is named schema_version, event_version or contract_version.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-008",
+      "title": "Domain Events must have a timestamp field",
+      "rationale": "An event records something that happened — without a timestamp the fact cannot be ordered, replayed or audited",
+      "selects": "The most derived classes that carry the DomainEvent role.",
+      "checks": "A field, its own or a base's, is of one of the configured timestamp types (by default the building blocks' Timestamp, or datetime).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-010",
+      "title": "Marked domain services reside in a module domain",
+      "rationale": "Domain services are part of the domain layer, not application layer",
+      "selects": "Classes that carry the DomainService role.",
+      "checks": "Each sits in a domain package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-011",
+      "title": "Domain services must not carry prohibited framework metadata",
+      "rationale": "Domain objects carry no metadata for container management, persistence or transaction coordination",
+      "selects": "Classes in a domain package that carry the DomainService role.",
+      "checks": "No decorator, no base and no field default (Field(...), Column(...)) comes from a configured framework (django, fastapi, flask, litestar, marshmallow, pydantic, sqlalchemy, sqlmodel, starlette by default).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-012",
+      "title": "Domain Services should be stateless (only final fields for dependencies)",
+      "rationale": "Domain services should be stateless (only final fields for dependencies)",
+      "selects": "Classes that carry the DomainService role.",
+      "checks": "No method other than __init__ assigns to self. Python has no final field; statelessness is the absence of mutation.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-013",
+      "title": "Types carrying the factory role are named *Factory",
+      "rationale": "A factory is found by its role, and read by its name: a type that creates aggregates and is not called one makes the creation site hard to find in review and in a search",
+      "selects": "Classes that carry the Factory role.",
+      "checks": "The name ends with Factory.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-014",
+      "title": "Factories must reside in domain package",
+      "rationale": "Factories are part of the domain layer (complex aggregate creation logic)",
+      "selects": "Classes that carry the Factory role.",
+      "checks": "Each sits in a domain package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-015",
+      "title": "Factories must not carry prohibited framework metadata",
+      "rationale": "Domain objects carry no metadata for container management, persistence or transaction coordination",
+      "selects": "Classes in a domain package that carry the Factory role.",
+      "checks": "No decorator, no base and no field default (Field(...), Column(...)) comes from a configured framework (django, fastapi, flask, litestar, marshmallow, pydantic, sqlalchemy, sqlmodel, starlette by default).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-016",
+      "title": "Factories should be stateless (only final fields for dependencies)",
+      "rationale": "Factories should be stateless (only final fields for dependencies)",
+      "selects": "Classes that carry the Factory role.",
+      "checks": "No method other than __init__ assigns to self.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-017",
+      "title": "Specifications reside in the domain layer",
+      "rationale": "A specification is a rule of the model expressed as a predicate; it belongs where the model is, not in the layer that happens to ask the question",
+      "selects": "Classes that carry the Specification role or whose name ends with Specification.",
+      "checks": "Each sits in a domain package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-018",
+      "title": "Specifications must not carry prohibited framework metadata",
+      "rationale": "Domain objects carry no metadata for container management, persistence or transaction coordination",
+      "selects": "Specifications in a domain package.",
+      "checks": "No decorator, no base and no field default (Field(...), Column(...)) comes from a configured framework (django, fastapi, flask, litestar, marshmallow, pydantic, sqlalchemy, sqlmodel, starlette by default).",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-019",
+      "title": "Aggregates, entities and value objects must not use domain services",
+      "rationale": "A domain service exists for logic that spans several aggregates, so the application calls it; a model type that reaches for one would drive another aggregate from inside its own",
+      "selects": "Methods of classes that carry the Entity or Value role.",
+      "checks": "No method calls a class with the DomainService role or a function on it. A parameter of that type alone is not reported.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "advanced",
+      "id": "DCA-ADV-020",
+      "title": "Domain service operations take an aggregate or an entity",
+      "rationale": "A domain service works on the model itself; an operation that only takes extracted values moves the decision out of the domain and into its caller",
+      "selects": "Public methods of classes that carry the DomainService role.",
+      "checks": "At least one parameter's annotation names a class with the Entity role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-001",
+      "title": "The base InputPort contract is not redeclared in the project",
+      "rationale": "Base InputPort interface defines the generic contract for all use cases (Hexagonal Architecture)",
+      "selects": "Classes named InputPort below the base package.",
+      "checks": "There is none.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-002",
+      "title": "Commands reside in the application layer",
+      "rationale": "Use case commands should be in application layer (CQRS pattern)",
+      "selects": "Classes whose name ends with Command.",
+      "checks": "Each sits in an application package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-003",
+      "title": "Queries reside in the application layer",
+      "rationale": "Use case queries should be in application layer (CQRS pattern)",
+      "selects": "Classes whose name ends with Query.",
+      "checks": "Each sits in an application package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-004",
+      "title": "Use Case Commands should be immutable (final or records)",
+      "rationale": "Use case commands should be immutable (value objects)",
+      "selects": "Classes in an application package whose name ends with Command.",
+      "checks": "Each is a frozen dataclass, a NamedTuple or an enum, and holds no mutable collection.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-005",
+      "title": "Use Case Queries should be immutable (final or records)",
+      "rationale": "Use case queries should be immutable (value objects)",
+      "selects": "Classes in an application package whose name ends with Query.",
+      "checks": "Each is a frozen dataclass, a NamedTuple or an enum, and holds no mutable collection.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-006",
+      "title": "Types named *Result reside in the application layer",
+      "rationale": "Use case result models should be in application layer. Domain Value Objects with 'Result' in name are allowed in domain layer.",
+      "selects": "Classes whose name ends with Result and that do not carry the Value role.",
+      "checks": "Each sits in an application package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-007",
+      "title": "Use Case Result Models should be immutable (final or records)",
+      "rationale": "Use case result models should be immutable (value objects)",
+      "selects": "Classes in an application package whose name ends with Result.",
+      "checks": "Each is a frozen dataclass, a NamedTuple or an enum, and holds no mutable collection. A case of a closed result need not be named ...Result; the union alias is.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-008",
+      "title": "Types named *Response reside in an adapter",
+      "rationale": "HTTP response models should be in adapter layer",
+      "selects": "Classes whose name ends with Response.",
+      "checks": "Each sits in an adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-009",
+      "title": "Use cases that save an aggregate must publish its domain events",
+      "rationale": "A saved aggregate must not keep its events: unpublished, they are lost, and stored on the instance they may later be published out of context. Publishing belongs after the save, in the use case that owns the unit of work - unless the aggregate is proven never to register an event: its whole hierarchy is under scan and no code unit of it, of a helper it calls, or of any other scanned class registering on that aggregate (a nested class it never calls) calls registerEvent; a helper in another top-level class cannot reach the protected method; an unresolved type argument keeps the requirement. Checked per entry path, following calls within the use case class: every entry point that reaches a save - a method callable from outside the class, or one nothing in the class calls - must also reach a publication; a wrapper that publishes does not cover a direct call of the public method it wraps, and a helper two methods share does not connect them. That the publication follows the save and concerns the same aggregate is not established statically. Only DomainEventPublisher.publishAndClearEvents counts as a publication: iterating domainEvents() and calling publish(event), even followed by clearDomainEvents(), separates dispatch from acknowledgement and is not accepted",
+      "selects": "Use cases: classes, protocols excluded, that carry the InputPort role.",
+      "checks": "A use case that calls save on an attribute typed with a Repository also calls publish or publish_and_clear_events on an attribute typed with a DomainEventPublisher. An attribute's type is its annotation or that of the __init__ parameter assigned to it.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-010",
+      "title": "DTOs must not be used in the Domain Layer",
+      "rationale": "Domain layer should not depend on DTOs (presentation concerns) - Dependency Inversion Principle",
+      "selects": "Modules in a domain package.",
+      "checks": "None declares or names a class whose name ends with Dto.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-011",
+      "title": "DTOs must not be used in the Application Layer",
+      "rationale": "Application layer should use Command/Query/Response models, not presentation DTOs (Clean Architecture)",
+      "selects": "Modules in an application package.",
+      "checks": "None declares or names a class whose name ends with Dto.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-012",
+      "title": "Use cases that save an aggregate or publish domain events must have a transaction boundary",
+      "rationale": "The use case owns the unit of work. Saving an aggregate is one business fact, yet the repository may write it as several statements - an aggregate of entities and value objects often spans several tables - and a repository adapter draws no boundary of its own; without one, a failure between the statements leaves half an aggregate behind. Publishing adds a second effect that must fall with the save: integration events are relayed after commit by the framework's after-commit listeners, and their publication is registered in the publishing transaction. Without an active transaction the after-commit listeners are skipped silently and nothing is registered: the use case succeeds, the other contexts never hear of it. The boundary is either declarative transaction metadata (the configured transactional annotation on the class or the executing method) or an explicit TransactionBoundary.inTransaction(...) around load, mutate, save and publish. Checked per entry path, following calls within the class: from every entry point - a method callable from outside the class, or one nothing in the class calls - no route down to the saving, deleting or publishing method may be free of an annotation or a boundary; a covered caller does not cover another route to the same helper, and a boundary on one route does not cover a second route. Whether the save or the publication sits inside the block handed to inTransaction(...) is not visible in ArchUnit's call model, which folds a lambda's body into the enclosing method; that placement stays a review check",
+      "selects": "Use cases.",
+      "checks": "Every call of save, delete or delete_by_id on a Repository and of publish... on a DomainEventPublisher sits inside the work the use case hands to TransactionBoundary.in_transaction or in_transaction_closed - a lambda, a nested function or a method of its own. The explicit boundary is the only form.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-013",
+      "status": "n/a",
+      "reason": "DCA's Python transaction boundary is the explicit TransactionBoundary port, which DCA-USE-012 reads; the rule selects only declaratively transactional use cases."
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-014",
+      "title": "Use case packages within a module must use one consistent depth (flat or grouped by feature)",
+      "rationale": "A use case package sits either directly below the application package (application.<usecase>) or one level deeper inside a feature (application.<feature>.<usecase>). A feature is an optional, domain-named group of related use cases - a navigation boundary inside one bounded context, not a layer, module or aggregate owner. Mixing both forms in one module makes it unclear whether a package is a feature, a use case or a leftover; nesting deeper than a feature hides the use case. The rule checks legibility only: it does not infer bounded contexts, feature semantics or aggregate ownership. application.shared holds the context-wide output ports and is not a use case package",
+      "selects": "Use cases in an application package, the shared package excluded.",
+      "checks": "All of a context sit at one depth: application.<use_case> or application.<feature>.<use_case>.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-015",
+      "title": "Use Case Result Models must not expose aggregate roots or entities",
+      "rationale": "A result is the use case's answer, not a handle on the model: identity and behaviour stay behind the port; values, enriched models and read models may cross. Checked transitively through nested records, part records anywhere in the application layer (application.shared included), generic type arguments (List<T>, Optional<T>, Map<K,V>) and inherited fields, a generic base class's type parameters resolved as the result binds them",
+      "selects": "Classes in an application package whose name ends with Result.",
+      "checks": "No field annotation, through generic arguments and into other application classes, names a class with the Entity role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-016",
+      "title": "Use cases must not invoke other use cases",
+      "rationale": "Ordinary operations do not coordinate other operations; coordination requires explicit transaction and failure semantics",
+      "selects": "Use cases.",
+      "checks": "No field names a class or protocol with the InputPort role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-017",
+      "title": "Use cases expose no public operation outside their input port",
+      "rationale": "The input port describes the complete externally callable operation surface",
+      "selects": "Use cases.",
+      "checks": "No public method other than execute.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-018",
+      "title": "In a module grouped by feature, incoming adapters must drive the commands of one feature only",
+      "rationale": "Once the application is grouped, the incoming adapter is cut the same way: one controller changes state through the use cases of one feature. A class that drives the commands of two features grows with every use case of both and hides the cut the application already made. Reading a neighbouring feature's query is no reason to cut",
+      "selects": "Modules of an incoming adapter of a context whose use cases are grouped by feature.",
+      "checks": "The commands a module constructs belong to one feature.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-019",
+      "title": "Query use cases must not write or publish",
+      "rationale": "A read never creates. A query has no side effect: it does not create, save or publish, and when nothing exists it answers none. Find-or-create is a command, called where the caller is about to change state; a page or an answer that only shows what exists asks the query",
+      "selects": "Use cases whose execute takes a class whose name ends with Query.",
+      "checks": "No call of a write (save, delete, remove, add, insert, update, append, put, store) on a Repository or Store attribute, and no publish on a publisher.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-020",
+      "title": "Use cases must not parse raw input into an id",
+      "rationale": "The adapter turns raw input into the types the input port takes: an id arrives as the id's value type, parsed at the edge or by the value type's own factory, never as text the use case parses. Text that does not parse is a malformed call the adapter answers itself; the use case never sees it",
+      "selects": "Use cases.",
+      "checks": "No call of uuid.UUID(...). Parsing happens in the adapter or in the id's own constructor; a per-directory ruff.toml (banned-api uuid.UUID) holds it while editing.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source",
+        "ruff"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-001",
+      "title": "Application layer InputPort implementations must end with 'UseCase'",
+      "rationale": "InputPort implementations (use cases) should follow consistent naming conventions (Hexagonal Architecture)",
+      "selects": "Use cases in an application package.",
+      "checks": "The name ends with UseCase.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-002",
+      "status": "n/a",
+      "reason": "Python has no injectable stereotype decorator in DCA's reading: the composition root constructs use cases in code, so there is nothing to list."
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-003",
+      "title": "InputPort interfaces must end with 'InputPort'",
+      "rationale": "Input port interfaces should follow consistent naming conventions (Hexagonal Architecture)",
+      "selects": "Protocol classes in an application package that carry the InputPort role.",
+      "checks": "The name ends with InputPort.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-004",
+      "title": "Repository Interfaces must end with 'Repository' (name-based discovery)",
+      "rationale": "Repository interfaces should follow consistent naming conventions (DDD pattern)",
+      "selects": "Classes in an application package whose name contains Repository.",
+      "checks": "The name ends with Repository.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-005",
+      "status": "n/a",
+      "reason": "Python web handlers are functions registered by a router decorator, not controller classes; the module that holds them carries the name, and DCA-HEX-018 places it."
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-006",
+      "status": "n/a",
+      "reason": "Python web handlers are functions registered by a router decorator, not resource classes; the module that holds them carries the name, and DCA-HEX-018 places it."
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-007",
+      "title": "DTOs must reside in the adapter layer, not in domain or application",
+      "rationale": "DTOs are adapter concerns (presentation or external API) - not in domain or application",
+      "selects": "Classes whose name ends with Dto.",
+      "checks": "Each sits in an adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-008",
+      "title": "Converters must reside in the adapter layer",
+      "rationale": "Converters/Mappers translate between layers and should be in adapters",
+      "selects": "Classes whose name ends with Converter.",
+      "checks": "Each sits in an adapter package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-009",
+      "title": "No technical bucket packages - package by domain concept",
+      "rationale": "Packages are named after domain concepts from the ubiquitous language, not technical patterns",
+      "selects": "Every module and package of a context and of the shared kernel.",
+      "checks": "None is named entities, entity, value_objects, valueobjects, helpers, helper, util or utils.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-010",
+      "title": "Domain classes must not use technical suffixes (Helper, Util, Impl, Implementation)",
+      "rationale": "Domain names come from the ubiquitous language - name services by their specialty, not by technical role",
+      "selects": "Classes in a domain package.",
+      "checks": "No name ends with Helper, Util, Utils, Impl or Implementation.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-011",
+      "title": "ViewModels must reside in the configured web adapter package",
+      "rationale": "A ViewModel is shaped for the protocol of one incoming adapter and belongs in it. It has no reading in the domain or the application layer, and none in a second adapter",
+      "selects": "Classes whose name ends with ViewModel.",
+      "checks": "Each sits in the incoming adapters' web package.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-012",
+      "title": "Diagnostic: use cases and input ports named after a trigger rather than an effect",
+      "rationale": "A use case is named after its effect, never after its trigger or its caller. When and by whom it runs is the business of the adapter or the consumer that calls it; the same effect reached from a second trigger is the same use case, and a name that carries the trigger invites a second use case for it",
+      "selects": "Input ports and use cases in an application package.",
+      "checks": "Informational - lists names that start with On, After, When, Upon or Before followed by a capital, and never fails.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "naming",
+      "id": "DCA-NAM-013",
+      "title": "Use cases, input ports and published operations must not be named after a field they write",
+      "rationale": "An operation speaks the domain, not data access. A name after the field it writes (setLimit, updateStatus) says how the data changes, not what the change means; the glossary's verb says that (raise a limit, grant an initial limit), and the caller learns which rules run",
+      "selects": "Input ports and use cases in an application package, and public functions of an api package.",
+      "checks": "No class name starts with Set or Update followed by a capital, and no function name starts with set_ or update_.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "cycles",
+      "id": "DCA-CYC-001",
+      "title": "Domain Packages must not have cyclic dependencies (package-based slice discovery)",
+      "rationale": "Domain model packages should have clear boundaries and no cycles (Acyclic Dependencies Principle)",
+      "selects": "One slice per context: its domain package.",
+      "checks": "The slices import each other in no cycle.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "cycles",
+      "id": "DCA-CYC-002",
+      "title": "Application Layer must not have cyclic dependencies (package-based slice discovery)",
+      "rationale": "Application services should have clear boundaries and no cycles",
+      "selects": "One slice per context: its application package.",
+      "checks": "The slices import each other in no cycle.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "cycles",
+      "id": "DCA-CYC-003",
+      "title": "Outgoing Adapter Packages must not have cyclic dependencies",
+      "rationale": "Outgoing adapters should have clear boundaries and no cycles",
+      "selects": "One slice per context: its outgoing adapter package.",
+      "checks": "The slices import each other in no cycle.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "cycles",
+      "id": "DCA-CYC-004",
+      "title": "Incoming Adapter Packages must not have cyclic dependencies",
+      "rationale": "Incoming adapters should have clear boundaries and no cycles",
+      "selects": "One slice per context: its incoming adapter package.",
+      "checks": "The slices import each other in no cycle.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "cycles",
+      "id": "DCA-CYC-005",
+      "title": "Feature and use case packages within a module's application layer must not have cyclic dependencies",
+      "rationale": "The packages directly below a module's application package are its features (application.<feature>.<usecase>) or, in a flat layout, its use cases (application.<usecase>). A feature is an optional, domain-named group of related use cases; it may depend on another feature in one direction, but a cycle between two of them means the grouping does not carry its weight - the shared concept belongs in application.shared, in the domain, or in one of the two. application.shared is the context-wide port package and is not a slice. The rule does not infer bounded contexts or aggregate ownership from the packages it slices",
+      "selects": "One slice per use-case or feature module or package of a context's application, the shared package excluded.",
+      "checks": "The slices import each other in no cycle.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-001",
+      "title": "Exceptions declared in the domain layer must extend DomainException",
+      "rationale": "A failure the model raises is a broken business rule and says so through its type; a caller that cannot tell one from the platform's own failures cannot answer either of them properly",
+      "selects": "Exception classes in a domain package.",
+      "checks": "Each carries the DomainException role.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-002",
+      "title": "Domain and port exceptions reside in the layer whose failure they name",
+      "rationale": "The base type states which layer owns the failure; declaring it elsewhere puts the vocabulary of that layer outside it and lets an adapter invent failures the application never reports",
+      "selects": "Classes that carry the DomainException or the PortException role.",
+      "checks": "A DomainException sits in a domain package, a port exception in an application package - an output port's exception beside the port, although the adapter raises it.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-003",
+      "title": "Exceptions declared in the application layer must extend UseCaseException or OutputPortException",
+      "rationale": "A use case that cannot serve a request reports why through its type, so that one incoming adapter can map each outcome onto its protocol and another adapter can map the same outcome onto a different one; an output port that declares a failure in its contract names it the same way, so the use case can catch exactly that outcome",
+      "selects": "Exception classes in an application package that do not carry DomainException.",
+      "checks": "Each carries UseCaseException or OutputPortException; extending only PortException or InputPortException does not count.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-004",
+      "title": "Domain and port exceptions must not carry prohibited framework metadata",
+      "rationale": "An exception of an inner layer that carries container, persistence or protocol metadata has decided how the outside answers it, which is the incoming adapter's decision and only its; an annotation that fixes the answer's status decides it for every protocol at once, including the ones the exception knows nothing about",
+      "selects": "Classes that carry DomainException or PortException.",
+      "checks": "No base and no decorator comes from a configured framework - an HTTPException base included.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-005",
+      "title": "Domain and port exception names must stay in the language of their layer",
+      "rationale": "A failure named after a transport concept is a decision about the answer, taken in a layer that does not know the protocol; the name should say what went wrong, not what the caller should be told",
+      "selects": "Classes that carry DomainException or PortException.",
+      "checks": "The name contains none of Http, HTTP, StatusCode, ResponseStatus, Response.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-006",
+      "title": "Diagnostic: incoming adapter packages that drive a use case without translating its failures",
+      "rationale": "A package that drives the application and knows neither failure type nor a case of a closed result either lets everything escape to a generic handler or catches a generic type and answers every outcome the same way; whether it does is not visible in the import model. A use case may return its expected refusals as cases of a closed result instead of throwing them; a switch over those cases is the translation then. An adapter that names the abstract base of the port failures catches them generically and answers every outcome the same way",
+      "selects": "Modules of an incoming adapter that name an input port.",
+      "checks": "Informational - lists a module that names no class with the DomainException or UseCaseException role and no case of a closed result, and never fails. A closed result is the union an input port answers with: the second type argument of UseCase[IMP, O] or execute's return annotation, through a type alias. Whether a match covers every case is the type checker's (assert_never; DCA-PY-006). It also lists a module that names PortException, InputPortException or OutputPortException itself. Nothing is listed when the project has neither a failure class nor a closed result.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "released",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-007",
+      "title": "Diagnostic: failures that carry display data or objects instead of ids and figures",
+      "rationale": "A failure carries ids and figures, never what a page shows. Its fields are the typed identities and the values the rule compared; a name or a description of the thing an id refers to is resolved by the translation site through the queries it already has. A failure that carries the name decides for every surface what it shows, and one that carries an aggregate or an entity hands the model out through the error path",
+      "selects": "Classes that carry DomainException or PortException, and their fields.",
+      "checks": "Informational - lists every field annotated str or with an entity, and never fails.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-008",
+      "title": "Diagnostic: closed use-case results without a case marked as a refusal",
+      "rationale": "A closed result describes the outcomes a use case can answer with; some of them are refusals, some are not. A result may hold several outcomes of which none refuses - found or nothing found, sent or already sent - and that alone is reason enough to close it. The refusal marker on a case says the request was refused, a meaning the caller answers with or without a transaction, and it is what lets the transaction boundary roll a refusal back like a thrown failure. Whether a case refuses is domain knowledge the type does not show, so a closed result without any marked case is listed for a look, not failed: if one of its outcomes is a refusal and stays unmarked, the transaction commits the writes made before it",
+      "selects": "Closed results, as DCA-ERR-006 finds them; a case that is an exception is not one.",
+      "checks": "Informational - lists every closed result none of whose cases carries the Refusal role, and never fails. A result whose outcomes are all successes is correct as it is.",
+      "implementation": "python",
+      "status": "informational",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "errors",
+      "id": "DCA-ERR-009",
+      "title": "A domain exception is constructed only in the domain layer",
+      "rationale": "The model refuses: a domain exception names a business rule the model itself broke off. A use case never invents one. A failure the use case finds - an output port returned nothing, the caller does not own what it names, a precondition on a second aggregate - is the application's, a case of its result or a use-case exception; dressed as a domain failure it claims a rule the model never checked, and the model cannot know what a search found",
+      "selects": "Every call of a class with the DomainException role in a module outside the domain packages.",
+      "checks": "There is none - only the domain constructs a domain exception. Re-raising one the application caught is no construction.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "python",
+      "id": "DCA-PY-001",
+      "title": "A domain dataclass is frozen, by its base where it is a value, an id or an event",
+      "rationale": "A @dataclass without frozen=True in the domain is a mutable record without identity: neither a value nor an entity. A Value, Id or DomainEvent is a frozen dataclass by its base; a decorator of its own fails at import or quietly changes what the base set.",
+      "selects": "Classes in a domain package with a dataclass decorator.",
+      "checks": "A class with the Value, DomainEvent or IntegrationEvent role carries none; any other class that is no entity carries frozen=True.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "python",
+      "id": "DCA-PY-002",
+      "title": "Entities compare by identity",
+      "rationale": "A dataclass compares every field, which is value equality. Two states of the same entity must be equal and two entities with equal data must not; Entity gives identity equality, a dataclass decorator or an __eq__ of its own replaces it.",
+      "selects": "Classes that carry the Entity role, aggregate roots included.",
+      "checks": "No dataclass decorator unless it says eq=False, and no __eq__ of its own.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "python",
+      "id": "DCA-PY-003",
+      "title": "An output port is implemented by name",
+      "rationale": "A Protocol is structural: an adapter fits a port without naming it, and the rules - which read roles from bases - lose the implementation, and with it the placement rules. A port nobody names is a port the rules cannot follow to its adapter.",
+      "selects": "Protocol classes that carry the OutputPort role, and the classes of the outgoing adapters and the composition root.",
+      "checks": "Every port is named among the bases of some class or of a narrower port; no class fits a port's methods, by name and parameter names, without naming it.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "python",
+      "id": "DCA-PY-004",
+      "title": "The domain stays synchronous",
+      "rationale": "Async is an I/O concern of ports and adapters. A synchronous domain stays testable and deterministic and pulls no event loop into the model; the use case awaits its ports and calls the domain plainly.",
+      "selects": "Every module in a domain package.",
+      "checks": "No async def and no import of asyncio, trio or anyio.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "python",
+      "id": "DCA-PY-005",
+      "title": "The domain reads no clock and no randomness",
+      "rationale": "A domain that reads the time or draws a random value gives different results for the same input, so its tests depend on the moment they run. The value comes in from the application as a parameter.",
+      "selects": "Every module in a domain package.",
+      "checks": "No call of datetime.now/utcnow/today, date.today, time.time/monotonic/perf_counter, uuid.uuid1/4/7, os.urandom, secrets.* or random.*. A per-directory ruff.toml with banned-api holds the same while editing.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source",
+        "ruff"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "python",
+      "id": "DCA-PY-006",
+      "title": "A match over a closed result does not swallow a case it does not know",
+      "rationale": "Python's exhaustiveness over a union is the type checker's, and only where the match ends in assert_never: a wildcard case that answers something swallows the case a use case adds tomorrow, which Java's sealed switch and Rust's match would refuse.",
+      "selects": "match statements with a class pattern naming a case of a closed result (DCA-ERR-006).",
+      "checks": "A wildcard case (case _:) calls assert_never; the type checker then refuses a match that misses a case.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "type-checker",
+      "enforcement": [
+        "mypy",
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "python",
+      "id": "DCA-PY-007",
+      "title": "Cancellation passes through",
+      "rationale": "asyncio.CancelledError is a BaseException so that cancellation reaches the task that awaits. A handler that catches it - by name, as BaseException or bare - and does not raise again turns a cancelled request into one that goes on.",
+      "selects": "except clauses in every module that sits in a layer.",
+      "checks": "A bare except, an except BaseException and an except CancelledError raises again.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    }
+  ]
+}

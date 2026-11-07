@@ -1,0 +1,4 @@
+# A project that follows every rule: no rule may find anything here. Read, never run.
+[tool.dca]
+base-package = "fx"
+experimental = "all"

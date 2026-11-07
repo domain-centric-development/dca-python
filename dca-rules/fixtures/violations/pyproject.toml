@@ -1,0 +1,4 @@
+# At least one violation per implemented rule, each marked with its id. Read, never run.
+[tool.dca]
+base-package = "fx"
+experimental = "all"

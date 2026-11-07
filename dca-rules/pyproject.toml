@@ -1,0 +1,22 @@
+[project]
+name = "dca-rules"
+version = "0.0.0"
+description = "The Domain-Centric Architecture rule suite for Python: the same rule ids as the Java, .NET and Rust suites, checked over the source with ast. Standard library only."
+license = "MIT"
+authors = [{ name = "Christoph Bloemer" }]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+# `dca_rules.testing` runs the suite as pytest cases; the rules themselves need nothing.
+pytest = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://domaincentric.dev"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+dca_rules = ["py.typed", "rules.json"]
