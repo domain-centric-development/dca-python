@@ -13,3 +13,8 @@ class InMemory(ThingRepository):
 class ShapeJournal:  # DCA-PY-003: fits JournalPort by its shape, names it nowhere
     def write(self, entry: Label) -> None:
         pass
+
+
+class ShapePublisher:  # DCA-PY-003: fits DomainEventPublisher by its shape, names it nowhere
+    def publish(self, event: object) -> None:
+        pass

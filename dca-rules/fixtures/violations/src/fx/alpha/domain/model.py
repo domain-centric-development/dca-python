@@ -69,6 +69,7 @@ class Thing(AggregateRoot[ThingId], Owned):  # DCA-TAC-026: Owned without the ow
         self.repo = repo  # DCA-TAC-002
         self.other = other  # DCA-TAC-003
         self.count = count  # DCA-TAC-025
+        self.parent: Thing | None = None  # DCA-TAC-003: another aggregate of its own type
 
     @property
     def id(self) -> ThingId:

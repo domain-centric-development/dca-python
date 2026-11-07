@@ -122,7 +122,34 @@ def py_003(p: Project) -> list[Finding]:
                         "and does not name it among its bases",
                     )
                 )
+    for klass in concrete:
+        if klass.place.layer not in ("outgoing", "root"):
+            continue
+        roles = p.roles(klass)
+        for block, methods in BB_PORTS.items():
+            if methods <= set(klass.methods) and not roles & BB_PORT_FAMILY[block]:
+                found.append(
+                    Finding(
+                        klass.where(),
+                        f"{klass.name} fits the building block {block} by its shape "
+                        "and does not name it among its bases",
+                    )
+                )
     return found
+
+
+#: The building blocks' own ports by the methods an implementation must define, and the roles that already name
+#: one of the same shape (two publishers share `publish`).
+BB_PORTS = {
+    "Repository": {"find_by_id", "save", "delete_by_id"},
+    "DomainEventPublisher": {"publish"},
+    "TransactionBoundary": {"in_transaction"},
+}
+BB_PORT_FAMILY = {
+    "Repository": {"Repository"},
+    "DomainEventPublisher": {"DomainEventPublisher", "IntegrationEventPublisher"},
+    "TransactionBoundary": {"TransactionBoundary"},
+}
 
 
 @rule("DCA-PY-004")

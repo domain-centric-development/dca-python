@@ -35,7 +35,7 @@ def field_types(p: Project, klass: Klass, role: str) -> list[tuple[str, int, Kla
     out = []
     for field in klass.fields:
         for named in p.type_classes(klass.module, field.annotation):
-            if p.has(named, role) and named is not klass:
+            if p.has(named, role) and (named is not klass or role == "AggregateRoot"):
                 out.append((field.name, field.line, named))
     return out
 

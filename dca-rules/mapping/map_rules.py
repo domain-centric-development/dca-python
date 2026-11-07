@@ -865,8 +865,9 @@ PYTHON_ONLY = [
         enforcement=[S],
         selects="Protocol classes that carry the OutputPort role, and the classes of "
         "the outgoing adapters and the composition root.",
-        checks="Every port is named among the bases of some class or of a narrower port; no class fits a port's "
-        "methods, by name and parameter names, without naming it.",
+        checks="Every port is named among the bases of some class or of a narrower port; no class of the outgoing "
+        "adapters or the composition root fits a port's methods, by name and parameter names, without naming it - "
+        "nor the methods of a building block's port (Repository, DomainEventPublisher, TransactionBoundary).",
     ),
     dict(
         id="DCA-PY-004",
