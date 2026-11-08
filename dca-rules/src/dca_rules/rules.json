@@ -1576,6 +1576,22 @@
       "implemented": true
     },
     {
+      "set": "advanced",
+      "id": "DCA-ADV-021",
+      "title": "Domain services are used only by the application and by other domain services",
+      "rationale": "A domain service holds logic that spans aggregates, and the use case decides when it runs and puts its outcome into the result. A model type, a read model, an adapter or the composition root that calls one takes that decision outside the application - the incoming adapter and the model type are each held by a narrower rule too (DCA-HEX-012, DCA-ADV-019)",
+      "selects": "Every module outside an application package and the building blocks: its module-level statements, its functions and the methods of its classes, a class with the DomainService role excluded. A domain service is a class with the DomainService role, as DCA-ADV-010 selects it: roles are nominal on classes, so a module of functions is no domain service by this rule.",
+      "checks": "No call constructs a class with the DomainService role, calls a function on it, or calls a method on a parameter or a local or module-level name annotated with it or assigned a construction of it, on a self.<attribute> typed with it or assigned one, or on one built in place. In an infrastructure package - the context's or the project's, the composition root - a construction (the class called, or a class or static method annotated to return it) passes; a call there is reported. A parameter of that type alone is not reported; a call through a name the suite cannot type is not seen.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
       "set": "usecase",
       "id": "DCA-USE-001",
       "title": "The base InputPort contract is not redeclared in the project",

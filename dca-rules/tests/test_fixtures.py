@@ -74,6 +74,15 @@ def test_a_reconstituting_factory_takes_its_yes_no_fact_back() -> None:
     assert not [m for m in lamp if m.startswith("Lamp.restore(lit)")]
 
 
+def test_a_domain_service_is_used_by_the_application_only() -> None:
+    found = [f.message for f in findings(fixture("violations"), "DCA-ADV-021")]
+    assert any(m.startswith("export calls pricing.price") for m in found), found
+    assert any(m.startswith("minimum calls PRICING.price") for m in found), found
+    assert any(m.startswith("Part.price calls Pricing.price") for m in found), found
+    assert not [m for m in found if m.startswith("fx.alpha.infrastructure.config constructs")], found
+    assert not [m for m in found if "AppService" in m], found
+
+
 def test_the_reconstituting_factory_follows_the_configured_names() -> None:
     layout = DcaLayout.from_pyproject(FIXTURES / "conforming" / "pyproject.toml")
     renamed = Project(dataclasses.replace(layout, reconstituting_factories=("rehydrate",)))

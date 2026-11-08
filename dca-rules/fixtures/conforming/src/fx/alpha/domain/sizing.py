@@ -10,6 +10,16 @@ class Balancing(DomainService):
         return first.is_full() == second.is_full()
 
 
+class Pairing(DomainService):
+    """A domain service may use another one (DCA-ADV-021)."""
+
+    def __init__(self, balancing: Balancing) -> None:
+        self._balancing = balancing
+
+    def pairs(self, first: Thing, second: Thing) -> bool:
+        return self._balancing.balanced(first, second)
+
+
 class ThingFactory(Factory):
     def fresh(self, thing_id: ThingId, owner: OwnerId) -> Thing:
         return Thing.create(thing_id, owner)

@@ -602,6 +602,20 @@ MAPPING = {
         "Public methods of classes that carry the DomainService role.",
         "At least one parameter's annotation names a class with the Entity role.",
     ),
+    "DCA-ADV-021": m(
+        AT,
+        [S],
+        "Every module outside an application package and the building blocks: its module-level statements, its "
+        "functions and the methods of its classes, a class with the DomainService role excluded. A domain service is "
+        "a class with the DomainService role, as DCA-ADV-010 selects it: roles are nominal on classes, so a module of "
+        "functions is no domain service by this rule.",
+        "No call constructs a class with the DomainService role, calls a function on it, or calls a method on a "
+        "parameter or a local or module-level name annotated with it or assigned a construction of it, on a "
+        "self.<attribute> typed with it or assigned one, or on one built in place. In an infrastructure package - the "
+        "context's or the project's, the composition root - a construction (the class called, or a class or static "
+        "method annotated to return it) passes; a call there is reported. A parameter of that type alone is not "
+        "reported; a call through a name the suite cannot type is not seen.",
+    ),
     # --- use case ----------------------------------------------------------------------------------------------
     "DCA-USE-001": m(AT, [S], "Classes named InputPort below the base package.", "There is none."),
     "DCA-USE-002": m(AT, [S], "Classes whose name ends with Command.", "Each sits in an application package."),

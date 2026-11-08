@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import ast
 
-from dca_rules.model import Klass, Project, parameters, public
+from dca_rules.model import Klass, Module, Project, parameters, public
 from dca_rules.rules import Finding, rule
-from dca_rules.rules.tactical import is_leaf
+from dca_rules.rules.tactical import builds_class, is_leaf
 
 VERSION_FIELDS = ("schema_version", "event_version", "contract_version")
 
@@ -239,5 +239,145 @@ def adv_020(p: Project) -> list[Finding]:
             if not any(p.has(n, "Entity") for n in takes):
                 found.append(
                     Finding(service.module.where(method), f"{service.name}.{name} takes no aggregate and no entity")
+                )
+    return found
+
+
+class _ServiceUses:
+    """The uses of a domain service in one scope: (node, what, whether it constructs one)."""
+
+    def __init__(self, p: Project, module: Module, names: set[str], attributes: set[str]) -> None:
+        self.p = p
+        self.module = module
+        self.names = set(names)
+        self.attributes = attributes
+        self.found: list[tuple[ast.AST, str, bool]] = []
+
+    def service(self, node: ast.expr) -> Klass | None:
+        klass = self.p.klass(self.module, node)
+        return klass if klass is not None and self.p.has(klass, "DomainService") else None
+
+    def built(self, node: ast.expr) -> Klass | None:
+        """The service an expression constructs: `Service(...)` or `Service.create(...)` returning the class."""
+        if not isinstance(node, ast.Call):
+            return None
+        klass = self.service(node.func)
+        if klass is not None:
+            return klass
+        if isinstance(node.func, ast.Attribute):
+            owner = self.service(node.func.value)
+            method = owner.methods.get(node.func.attr) if owner is not None else None
+            if owner is not None and method is not None and builds_class(owner, method):
+                return owner
+        return None
+
+    def holds(self, node: ast.expr) -> str | None:
+        """What a receiver is when it holds a domain service: a name, `self.<attribute>`, or one built in place."""
+        if isinstance(node, ast.Name) and node.id in self.names:
+            return node.id
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+            and node.attr in self.attributes
+        ):
+            return f"self.{node.attr}"
+        klass = self.built(node)
+        return klass.name if klass is not None else None
+
+    def bind(self, statement: ast.stmt) -> None:
+        """A local binding that holds a domain service: annotated with one, or assigned a construction."""
+        if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+            typed = any(self.p.has(k, "DomainService") for k in self.p.type_classes(self.module, statement.annotation))
+            if typed or (statement.value is not None and self.built(statement.value) is not None):
+                self.names.add(statement.target.id)
+        elif isinstance(statement, ast.Assign) and self.built(statement.value) is not None:
+            self.names.update(t.id for t in statement.targets if isinstance(t, ast.Name))
+
+    def read(self, nodes: list[ast.stmt]) -> None:
+        for statement in nodes:
+            for node in ast.walk(statement):
+                if isinstance(node, ast.stmt):
+                    self.bind(node)
+                if not isinstance(node, ast.Call):
+                    continue
+                klass = self.service(node.func)
+                if klass is not None:
+                    self.found.append((node, f"constructs {klass.name}", True))
+                    continue
+                if not isinstance(node.func, ast.Attribute):
+                    continue
+                owner = self.service(node.func.value)
+                if owner is not None:
+                    method = owner.methods.get(node.func.attr)
+                    constructs = method is not None and builds_class(owner, method)
+                    verb = "constructs" if constructs else "calls"
+                    self.found.append((node, f"{verb} {owner.name}.{node.func.attr}", constructs))
+                    continue
+                receiver = self.holds(node.func.value)
+                if receiver is not None:
+                    self.found.append((node, f"calls {receiver}.{node.func.attr}", False))
+
+
+def _service_names(p: Project, module: Module, arguments: list[ast.arg]) -> set[str]:
+    return {a.arg for a in arguments if any(p.has(k, "DomainService") for k in p.type_classes(module, a.annotation))}
+
+
+def _service_attributes(p: Project, klass: Klass) -> set[str]:
+    """`self.<attribute>`s that hold a domain service: typed with one, or assigned a construction."""
+    typed = {name for name, roles in p.self_types(klass).items() if "DomainService" in roles}
+    probe = _ServiceUses(p, klass.module, set(), set())
+    for node in ast.walk(klass.node):
+        if (
+            isinstance(node, ast.Assign)
+            and probe.built(node.value) is not None
+            and any(
+                isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self"
+                for t in node.targets
+            )
+        ):
+            typed.update(t.attr for t in node.targets if isinstance(t, ast.Attribute))
+    return typed
+
+
+@rule("DCA-ADV-021")
+def adv_021(p: Project) -> list[Finding]:
+    found = []
+    for module in p.modules.values():
+        layer = module.place.layer
+        if layer == "application" or p.is_bb(module.dotted):
+            continue
+        root = layer in ("root", "infrastructure")
+        classes = {k.node: k for k in p.classes.values() if k.module is module}
+        top = _ServiceUses(p, module, set(), set())
+        top.read(
+            [s for s in module.tree.body if not isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+        )
+        scopes: list[tuple[str, _ServiceUses]] = [(module.dotted, top)]
+        for statement in module.tree.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                uses = _ServiceUses(p, module, top.names | _service_names(p, module, parameters(statement)), set())
+                uses.read(statement.body)
+                scopes.append((statement.name, uses))
+            elif isinstance(statement, ast.ClassDef):
+                klass = classes.get(statement)
+                if klass is None or p.has(klass, "DomainService"):
+                    continue
+                attributes = _service_attributes(p, klass)
+                for name, method in klass.methods.items():
+                    names = top.names | _service_names(p, module, parameters(method))
+                    uses = _ServiceUses(p, module, names, attributes)
+                    uses.read(method.body)
+                    scopes.append((f"{klass.name}.{name}", uses))
+        for where, uses in scopes:
+            for node, what, construction in uses.found:
+                if root and construction:
+                    continue
+                found.append(
+                    Finding(
+                        module.where(node),
+                        f"{where} {what}; a domain service is used by the application and by other domain "
+                        "services only",
+                    )
                 )
     return found

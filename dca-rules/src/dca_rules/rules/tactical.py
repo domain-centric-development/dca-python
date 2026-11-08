@@ -386,12 +386,18 @@ def _bare(p: Project, klass: Klass, annotation: ast.expr | None) -> list[str]:
     )
 
 
-def _rebuilds(p: Project, klass: Klass, name: str, method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """The factory that rebuilds a stored object: a class or static method named as configured, returning the class."""
+def builds_class(klass: Klass, method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A class or static method annotated to return its class (or Self): a constructor by another name."""
     factory = any(isinstance(d, ast.Name) and d.id in ("classmethod", "staticmethod") for d in method.decorator_list)
     returned = method.returns
-    returns_class = returned is not None and (ast.unparse(returned).strip("'\"") in (klass.name, "Self", "typing.Self"))
-    return factory and returns_class and name.lower() in {n.lower() for n in p.layout.reconstituting_factories}
+    return (
+        factory and returned is not None and ast.unparse(returned).strip("'\"") in (klass.name, "Self", "typing.Self")
+    )
+
+
+def _rebuilds(p: Project, klass: Klass, name: str, method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """The factory that rebuilds a stored object: a class or static method named as configured, returning the class."""
+    return builds_class(klass, method) and name.lower() in {n.lower() for n in p.layout.reconstituting_factories}
 
 
 @rule("DCA-TAC-025")
