@@ -18,3 +18,8 @@ class ShapeJournal:  # DCA-PY-003: fits JournalPort by its shape, names it nowhe
 class ShapePublisher:  # DCA-PY-003: fits DomainEventPublisher by its shape, names it nowhere
     def publish(self, event: object) -> None:
         pass
+
+
+class ShapeRatings:  # DCA-PY-003: fits the domain gateway Ratings by its shape, names it nowhere
+    def rating_of(self, key: str) -> bool:
+        return bool(key)

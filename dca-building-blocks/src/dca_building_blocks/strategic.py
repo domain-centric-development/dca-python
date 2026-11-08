@@ -103,6 +103,7 @@ class SharedKernel:
 
 class OpenHostService:
     """Marks a published interface another bounded context may call: it sits in the context's `api` package or in
-    an incoming adapter."""
+    an incoming adapter. A class extends it; an open host service of functions declares its package instead, as a
+    context does - `__dca__ = OpenHostService()` in the package's `__init__.py`."""
 
     __slots__ = ()

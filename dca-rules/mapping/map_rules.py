@@ -412,7 +412,8 @@ MAPPING = {
     "DCA-STR-005": m(
         AT,
         [S],
-        "Classes that carry the OpenHostService role.",
+        "Classes that carry the OpenHostService role, and modules that declare one: an open host service of "
+        "functions marks its package with __dca__ = OpenHostService() in its __init__.py.",
         "Each sits in an api package or in an incoming adapter package.",
     ),
     "DCA-STR-006": m(
@@ -857,16 +858,17 @@ PYTHON_ONLY = [
     ),
     dict(
         id="DCA-PY-003",
-        title="An output port is implemented by name",
+        title="A port is implemented by name",
         rationale="A Protocol is structural: an adapter fits a port without naming it, and the rules - which read "
         "roles from bases - lose the implementation, and with it the placement rules. A port nobody names "
-        "is a port the rules cannot follow to its adapter.",
+        "is a port the rules cannot follow to its adapter. That holds for every port the building blocks "
+        "declare: an output port of the application and a domain gateway of the domain alike.",
         category=AT,
         enforcement=[S],
-        selects="Protocol classes that carry the OutputPort role, and the classes of "
+        selects="Protocol classes that carry the OutputPort or the DomainGateway role, and the classes of "
         "the outgoing adapters and the composition root.",
         checks="Every port is named among the bases of some class or of a narrower port; no class of the outgoing "
-        "adapters or the composition root that names no output port fits a port's methods, by name and parameter "
+        "adapters or the composition root that names no port fits a port's methods, by name and parameter "
         "names - nor the methods of a building block's port (Repository, DomainEventPublisher, TransactionBoundary). "
         "A class that names a port and fits another one by its shape is held to the port it names.",
     ),

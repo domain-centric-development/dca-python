@@ -6,7 +6,7 @@ import ast
 import dataclasses
 
 from dca_rules.model import BB, Module, Project, keyword
-from dca_rules.rules import Finding, project_imports, rule
+from dca_rules.rules import Checked, Finding, project_imports, rule
 
 RELATIONSHIPS = ("Upstream", "ExternalUpstream", "Partnership")
 
@@ -86,23 +86,28 @@ def edges(p: Project) -> list[tuple[Module, int, str, str, str]]:
 
 
 @rule("DCA-MAP-001")
-def map_001(p: Project) -> list[Finding]:
+def map_001(p: Project) -> Checked:
+    """Selects every relationship the source declares, wherever it sits."""
     homes = {d.module.dotted for d in declared(p).values()}
     found = []
+    selected = 0
     for module in p.modules.values():
         for call, name in ((n, p.resolve(module, n.func)) for n in ast.walk(module.tree) if isinstance(n, ast.Call)):
-            if name in {f"{BB}.{r}" for r in RELATIONSHIPS} and module.dotted not in homes:
+            if name not in {f"{BB}.{r}" for r in RELATIONSHIPS}:
+                continue
+            selected += 1
+            if module.dotted not in homes:
                 found.append(
                     Finding(
                         module.where(call),
                         f"{module.dotted} declares a {name.rsplit('.', 1)[-1]} outside a bounded context's declaration",
                     )
                 )
-    return found
+    return Checked(selected, found)
 
 
 @rule("DCA-MAP-002")
-def map_002(p: Project) -> list[Finding]:
+def map_002(p: Project) -> Checked:
     found = []
     contexts = declared(p)
     for d in contexts.values():
@@ -119,27 +124,35 @@ def map_002(p: Project) -> list[Finding]:
             if (name, interaction) in seen:
                 found.append(Finding(d.module.where(call), f"{d.name} declares {name} {interaction} twice"))
             seen.add((name, interaction))
-    return found
+    return Checked(sum(len(d.externals) for d in contexts.values()), found)
+
+
+def _upstreams(contexts: dict[str, Declared]) -> int:
+    return sum(len(d.upstreams) for d in contexts.values())
 
 
 @rule("DCA-MAP-004")
-def map_004(p: Project) -> list[Finding]:
+def map_004(p: Project) -> Checked:
     contexts = declared(p)
-    return [
-        Finding(
-            d.module.where(c),
-            f"{d.name} declares the upstream {text(c, 'context', 0)!r}, which is itself or no context",
-        )
-        for d in contexts.values()
-        for c in d.upstreams
-        if text(c, "context", 0) not in contexts or text(c, "context", 0) == d.name
-    ]
+    return Checked(
+        _upstreams(contexts),
+        [
+            Finding(
+                d.module.where(c),
+                f"{d.name} declares the upstream {text(c, 'context', 0)!r}, which is itself or no context",
+            )
+            for d in contexts.values()
+            for c in d.upstreams
+            if text(c, "context", 0) not in contexts or text(c, "context", 0) == d.name
+        ],
+    )
 
 
 @rule("DCA-MAP-005")
-def map_005(p: Project) -> list[Finding]:
+def map_005(p: Project) -> Checked:
     found = []
-    for d in declared(p).values():
+    contexts = declared(p)
+    for d in contexts.values():
         seen = set()
         for call in d.upstreams:
             target, via = text(call, "context", 0), members(call, "via")
@@ -149,11 +162,11 @@ def map_005(p: Project) -> list[Finding]:
                 if (target, channel) in seen:
                     found.append(Finding(d.module.where(call), f"{d.name} declares {target} via {channel} twice"))
                 seen.add((target, channel))
-    return found
+    return Checked(_upstreams(contexts), found)
 
 
 @rule("DCA-MAP-007")
-def map_007(p: Project) -> list[Finding]:
+def map_007(p: Project) -> Checked:
     contexts = declared(p)
     used = {(src, dst, ch) for _m, _l, src, dst, ch in edges(p)}
     found = []
@@ -170,7 +183,7 @@ def map_007(p: Project) -> list[Finding]:
                             f"{d.name} declares {target.name} via {channel}; no module of it uses that channel",
                         )
                     )
-    return found
+    return Checked(_upstreams(contexts), found)
 
 
 def _upstream(contexts: dict[str, Declared], src: str, dst: str) -> ast.Call | None:
@@ -182,10 +195,12 @@ def _upstream(contexts: dict[str, Declared], src: str, dst: str) -> ast.Call | N
 
 
 @rule("DCA-MAP-008")
-def map_008(p: Project) -> list[Finding]:
+def map_008(p: Project) -> Checked:
+    """Selects the imports into another context's api."""
     contexts = declared(p)
     found = []
-    for module, line, src, dst, channel in edges(p):
+    selected = edges(p)
+    for module, line, src, dst, channel in selected:
         call = _upstream(contexts, src, dst)
         if call is None or ("acl" not in translation(call) and "anti" not in translation(call)):
             continue
@@ -198,25 +213,31 @@ def map_008(p: Project) -> list[Finding]:
                     f"anti-corruption layer only the {wanted} adapter does",
                 )
             )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-MAP-009")
-def map_009(p: Project) -> list[Finding]:
+def map_009(p: Project) -> Checked:
+    """Selects the imports into another context's api."""
     contexts = declared(p)
-    return [
-        Finding(m.where(line), f"{m.dotted} lets the contract of {dst} into the domain")
-        for m, line, src, dst, _ch in edges(p)
-        if m.place.layer == "domain"
-        and (c := _upstream(contexts, src, dst)) is not None
-        and "conformist" in translation(c)
-    ]
+    selected = edges(p)
+    return Checked(
+        len(selected),
+        [
+            Finding(m.where(line), f"{m.dotted} lets the contract of {dst} into the domain")
+            for m, line, src, dst, _ch in selected
+            if m.place.layer == "domain"
+            and (c := _upstream(contexts, src, dst)) is not None
+            and "conformist" in translation(c)
+        ],
+    )
 
 
 @rule("DCA-MAP-010")
-def map_010(p: Project) -> list[Finding]:
+def map_010(p: Project) -> Checked:
     found = []
-    for d in declared(p).values():
+    contexts = declared(p)
+    for d in contexts.values():
         for call in d.externals:
             listed = keyword(call, "contract_packages")
             packages = [v for v in listed if isinstance(v, str)] if isinstance(listed, list) else []
@@ -239,15 +260,17 @@ def map_010(p: Project) -> list[Finding]:
                                 f"{text(call, 'name', 0)} outside the {wanted} adapter",
                             )
                         )
-    return found
+    return Checked(sum(len(d.externals) for d in contexts.values()), found)
 
 
 @rule("DCA-MAP-011")
-def map_011(p: Project) -> list[Finding]:
+def map_011(p: Project) -> Checked:
+    """Selects the imports into another context's api."""
     contexts = declared(p)
     by_package = {d.package: d for d in contexts.values()}
     found = []
-    for module, line, src, dst, channel in edges(p):
+    selected = edges(p)
+    for module, line, src, dst, channel in selected:
         call = _upstream(contexts, src, dst)
         if call is None or channel not in members(call, "via"):
             name = by_package[dst].name if dst in by_package else dst
@@ -258,11 +281,11 @@ def map_011(p: Project) -> list[Finding]:
                     f"Upstream(context={name!r}, via=(...{channel.upper()},)) declaration",
                 )
             )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-MAP-012")
-def map_012(p: Project) -> list[Finding]:
+def map_012(p: Project) -> Checked:
     contexts = declared(p)
     found = []
     for d in contexts.values():
@@ -281,11 +304,11 @@ def map_012(p: Project) -> list[Finding]:
                         f"{d.name} declares a partnership with {other}, which does not declare it back",
                     )
                 )
-    return found
+    return Checked(sum(len(d.partnerships) for d in contexts.values()), found)
 
 
 @rule("DCA-MAP-013")
-def map_013(p: Project) -> list[Finding]:
+def map_013(p: Project) -> Checked:
     found = []
     for d in declared(p).values():
         for call in d.upstreams:
@@ -300,4 +323,4 @@ def map_013(p: Project) -> list[Finding]:
             found.append(Finding(d.module.where(call), f"{d.name} -> external {text(call, 'name', 0)}"))
         for call in d.partnerships:
             found.append(Finding(d.module.where(call), f"{d.name} <-> {text(call, 'context', 0)}"))
-    return found
+    return Checked(len(found), found)

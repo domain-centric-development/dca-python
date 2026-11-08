@@ -6,7 +6,7 @@ import ast
 from collections.abc import Callable, Iterator
 
 from dca_rules.model import Klass, Module, Project, dotted_name
-from dca_rules.rules import Finding, rule
+from dca_rules.rules import Checked, Finding, rule
 
 
 def named_classes(p: Project, module: Module) -> Iterator[tuple[ast.expr, Klass]]:
@@ -22,16 +22,17 @@ def named_classes(p: Project, module: Module) -> Iterator[tuple[ast.expr, Klass]
             yield node, klass
 
 
-def _names(p: Project, layer: str, test: str, what: str, predicate: Callable[[Klass], bool]) -> list[Finding]:
+def _names(p: Project, layer: str, test: str, what: str, predicate: Callable[[Klass], bool]) -> Checked:
     found = []
-    for module in p.in_layer(layer):
+    selected = p.in_layer(layer)
+    for module in selected:
         seen = set()
         for node, klass in named_classes(p, module):
             if klass.qualname in seen or not predicate(klass):
                 continue
             seen.add(klass.qualname)
             found.append(Finding(module.where(node), f"{module.dotted} names {test} {klass.name}: {what}"))
-    return found
+    return Checked(len(selected), found)
 
 
 def is_use_case(p: Project, klass: Klass) -> bool:
@@ -39,48 +40,62 @@ def is_use_case(p: Project, klass: Klass) -> bool:
 
 
 @rule("DCA-HEX-003")
-def hex_003(p: Project) -> list[Finding]:
+def hex_003(p: Project) -> Checked:
     return _names(
         p, "incoming", "the repository", "an incoming adapter drives an input port", lambda k: p.has(k, "Repository")
     )
 
 
 @rule("DCA-HEX-008")
-def hex_008(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the class {k.name} sits in {k.module.dotted}, outside the outgoing adapters")
-        for k in p.classes.values()
-        if k.name.endswith("Repository") and not k.is_protocol and k.place.layer != "outgoing"
+def hex_008(p: Project) -> Checked:
+    selected = [
+        k for k in p.classes.values() if not k.is_protocol and (k.name.endswith("Repository") or p.has(k, "Repository"))
     ]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the class {k.name} sits in {k.module.dotted}, outside the outgoing adapters")
+            for k in selected
+            if k.name.endswith("Repository") and k.place.layer != "outgoing"
+        ],
+    )
 
 
 @rule("DCA-HEX-009")
-def hex_009(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the protocol {k.name} in application.shared does not extend OutputPort")
-        for k in p.classes_in("application")
-        if k.place.shared and k.is_protocol and not p.has(k, "OutputPort")
-    ]
+def hex_009(p: Project) -> Checked:
+    selected = [k for k in p.classes_in("application") if k.place.shared and k.is_protocol]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the protocol {k.name} in application.shared does not extend OutputPort")
+            for k in selected
+            if not p.has(k, "OutputPort")
+        ],
+    )
 
 
 @rule("DCA-HEX-010")
-def hex_010(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the output port {k.name} is declared in the domain")
-        for k in p.with_role("OutputPort")
-        if k.is_protocol and k.place.layer == "domain"
-    ]
+def hex_010(p: Project) -> Checked:
+    selected = [k for k in p.with_role("OutputPort") if k.is_protocol]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the output port {k.name} is declared in the domain")
+            for k in selected
+            if k.place.layer == "domain"
+        ],
+    )
 
 
 @rule("DCA-HEX-011")
-def hex_011(p: Project) -> list[Finding]:
+def hex_011(p: Project) -> Checked:
     return _names(
         p, "incoming", "the use case", "an incoming adapter depends on the input port", lambda k: is_use_case(p, k)
     )
 
 
 @rule("DCA-HEX-012")
-def hex_012(p: Project) -> list[Finding]:
+def hex_012(p: Project) -> Checked:
     return _names(
         p,
         "incoming",
@@ -91,7 +106,7 @@ def hex_012(p: Project) -> list[Finding]:
 
 
 @rule("DCA-HEX-013")
-def hex_013(p: Project) -> list[Finding]:
+def hex_013(p: Project) -> Checked:
     return _names(
         p,
         "outgoing",
@@ -125,11 +140,10 @@ def handlers(p: Project) -> Iterator[tuple[Module, ast.FunctionDef | ast.AsyncFu
 
 
 @rule("DCA-HEX-014")
-def hex_014(p: Project) -> list[Finding]:
+def hex_014(p: Project) -> Checked:
     found = []
-    for module, function, method, _ in handlers(p):
-        if method != "get":
-            continue
+    selected = [(module, function) for module, function, method, _ in handlers(p) if method == "get"]
+    for module, function in selected:
         for call, klass in p.constructions(module, function):
             if klass.name.endswith("Command"):
                 found.append(
@@ -138,13 +152,14 @@ def hex_014(p: Project) -> list[Finding]:
                         f"the GET handler {function.name} drives an input port with the command {klass.name}",
                     )
                 )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-HEX-016")
-def hex_016(p: Project) -> list[Finding]:
+def hex_016(p: Project) -> Checked:
     found = []
-    for module in p.in_layer("incoming", "outgoing", "adapter"):
+    selected = p.in_layer("incoming", "outgoing", "adapter")
+    for module in selected:
         for node in ast.walk(module.tree):
             if isinstance(node, ast.Attribute) and node.attr == "name" and isinstance(node.value, ast.Attribute):
                 klass = p.klass(module, node.value.value)
@@ -156,19 +171,23 @@ def hex_016(p: Project) -> list[Finding]:
                     found.append(
                         Finding(module.where(node), f"{module.dotted} publishes {klass.name} by its member name")
                     )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-HEX-018")
-def hex_018(p: Project) -> list[Finding]:
-    return [
-        Finding(
-            module.where(function),
-            f"the handler {function.name} sits in {module.dotted}, outside the incoming adapters",
-        )
-        for module, function, _, _ in handlers(p)
-        if module.place.layer != "incoming"
-    ]
+def hex_018(p: Project) -> Checked:
+    selected = [(module, function) for module, function, _, _ in handlers(p)]
+    return Checked(
+        len(selected),
+        [
+            Finding(
+                module.where(function),
+                f"the handler {function.name} sits in {module.dotted}, outside the incoming adapters",
+            )
+            for module, function in selected
+            if module.place.layer != "incoming"
+        ],
+    )
 
 
 def drives_an_input_port(p: Project, klass: Klass) -> bool:
@@ -179,10 +198,11 @@ def drives_an_input_port(p: Project, klass: Klass) -> bool:
 
 
 @rule("DCA-HEX-019")
-def hex_019(p: Project) -> list[Finding]:
+def hex_019(p: Project) -> Checked:
     found = []
-    for klass in p.with_role("OutputPort"):
-        if klass.is_protocol or p.roles(klass) & {"Repository", "Store"} or klass.place.layer == "outgoing":
+    selected = [k for k in p.with_role("OutputPort") if not k.is_protocol]
+    for klass in selected:
+        if p.roles(klass) & {"Repository", "Store"} or klass.place.layer == "outgoing":
             continue
         if klass.place.layer == "root" and drives_an_input_port(p, klass):
             continue
@@ -192,7 +212,7 @@ def hex_019(p: Project) -> list[Finding]:
                 f"{klass.name} implements an output port in {klass.module.dotted}, outside the outgoing adapters",
             )
         )
-    return found
+    return Checked(len(selected), found)
 
 
 ROLE_QUESTIONS = (
@@ -208,11 +228,13 @@ ROLE_QUESTIONS = (
 
 
 @rule("DCA-HEX-020")
-def hex_020(p: Project) -> list[Finding]:
+def hex_020(p: Project) -> Checked:
+    """Selects the incoming adapters; nothing where the layout names no declarative authorization to advise."""
     if not p.layout.authorization_decorators:
-        return []
+        return Checked(0, [])
     found = []
-    for module in p.in_layer("incoming"):
+    selected = p.in_layer("incoming")
+    for module in selected:
         for node in ast.walk(module.tree):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in ROLE_QUESTIONS:
                 found.append(
@@ -222,35 +244,54 @@ def hex_020(p: Project) -> list[Finding]:
                         "a claims-only check is declared on the route",
                     )
                 )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-STR-005")
-def str_005(p: Project) -> list[Finding]:
-    return [
+def str_005(p: Project) -> Checked:
+    """Selects the classes that carry the OpenHostService role and the modules that declare one: an open host
+    service of functions marks its package with `__dca__ = OpenHostService()`."""
+    classes = p.with_role("OpenHostService")
+    modules = p.module_markers("OpenHostService")
+    found = [
         Finding(
             k.where(),
             f"the open host service {k.name} sits in {k.module.dotted}, neither in an api package "
             "nor in an incoming adapter",
         )
-        for k in p.with_role("OpenHostService")
+        for k in classes
         if k.place.layer not in ("api", "incoming")
     ]
+    found += [
+        Finding(
+            module.where(call),
+            f"{module.dotted} declares an open host service and sits neither in an api package "
+            "nor in an incoming adapter",
+        )
+        for module, call in modules
+        if module.place.layer not in ("api", "incoming")
+    ]
+    return Checked(len(classes) + len(modules), found)
 
 
 @rule("DCA-STR-007")
-def str_007(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the integration event {k.name} sits in {k.module.dotted}, outside api.events")
-        for k in p.with_role("IntegrationEvent")
-        if not (k.place.layer == "api" and k.place.sub == "events")
-    ]
+def str_007(p: Project) -> Checked:
+    selected = p.with_role("IntegrationEvent")
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the integration event {k.name} sits in {k.module.dotted}, outside api.events")
+            for k in selected
+            if not (k.place.layer == "api" and k.place.sub == "events")
+        ],
+    )
 
 
 @rule("DCA-STR-008")
-def str_008(p: Project) -> list[Finding]:
+def str_008(p: Project) -> Checked:
     found = []
-    for event in p.with_role("IntegrationEvent"):
+    selected = p.with_role("IntegrationEvent")
+    for event in selected:
         found += [
             Finding(event.module.where(f.line), f"{event.name}.{f.name} is a mutable collection")
             for f in p.mutable_fields(event)
@@ -258,24 +299,25 @@ def str_008(p: Project) -> list[Finding]:
         found += [
             Finding(event.module.where(n), f"{event.name}.{name} changes its state") for name, n in p.mutators(event)
         ]
-    return found
+    return Checked(len(selected), found)
 
 
-@rule("DCA-STR-010")
-def str_010(p: Project) -> list[Finding]:
-    return []
+@rule("DCA-STR-010", doctrine=True)
+def str_010(p: Project) -> Checked:
+    return Checked(0, [])
 
 
 @rule("DCA-STR-013")
-def str_013(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"{k.name} in {k.module.dotted} does not extend IntegrationEvent")
-        for k in p.classes.values()
-        if k.place.layer == "api"
-        and k.place.sub == "events"
-        and not p.has(k, "IntegrationEvent")
-        and not any(a.startswith("enum.") for a in p.ancestors(k))
-    ]
+def str_013(p: Project) -> Checked:
+    selected = [k for k in p.classes.values() if k.place.layer == "api" and k.place.sub == "events"]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"{k.name} in {k.module.dotted} does not extend IntegrationEvent")
+            for k in selected
+            if not p.has(k, "IntegrationEvent") and not any(a.startswith("enum.") for a in p.ancestors(k))
+        ],
+    )
 
 
 def decorator_names(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:

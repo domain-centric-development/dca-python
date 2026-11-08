@@ -1,4 +1,5 @@
-"""`python -m dca_rules [pyproject.toml] [RULE-ID ...]`: every finding, one line each; exit 1 when a rule fails."""
+"""`python -m dca_rules [pyproject.toml] [RULE-ID ...]`: every finding, one line each, and every rule that selected
+nothing; exit 1 when a rule fails - a finding, or an empty selection `[tool.dca] allow-empty` does not name."""
 
 from __future__ import annotations
 
@@ -18,9 +19,9 @@ def main(argv: list[str]) -> int:
     failed = 0
     for rule_id in wanted:
         outcome = run(project, rule_id)
-        if outcome.findings:
+        if outcome.findings or outcome.kind == "empty":
             print(report(rule_id, outcome))
-            failed += 0 if outcome.informational else 1
+        failed += 1 if outcome.fails else 0
     return 1 if failed or project.problems else 0
 
 

@@ -6,7 +6,7 @@ from __future__ import annotations
 import ast
 
 from dca_rules.model import Klass, Project, dotted_name, parameters
-from dca_rules.rules import Finding, rule
+from dca_rules.rules import Checked, Finding, rule
 from dca_rules.rules.errors import closed_results
 
 CLOCK_AND_CHANCE = {
@@ -30,13 +30,11 @@ CLOCK_AND_CHANCE = {
 
 
 @rule("DCA-PY-001")
-def py_001(p: Project) -> list[Finding]:
+def py_001(p: Project) -> Checked:
     """A domain dataclass is frozen, by its base where it is a value, an id or an event."""
     found = []
-    for klass in p.classes_in("domain"):
-        decorator = p.is_dataclass(klass)
-        if decorator is None:
-            continue
+    selected = [(k, d) for k in p.classes_in("domain") if (d := p.is_dataclass(k)) is not None]
+    for klass, decorator in selected:
         if p.roles(klass) & {"Value", "DomainEvent", "IntegrationEvent"}:
             found.append(
                 Finding(
@@ -51,14 +49,15 @@ def py_001(p: Project) -> list[Finding]:
                     f"{klass.name} is a mutable dataclass in the domain; make it a Value or an Entity",
                 )
             )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-PY-002")
-def py_002(p: Project) -> list[Finding]:
+def py_002(p: Project) -> Checked:
     """An entity compares by identity: neither a dataclass that compares its fields nor an `__eq__` of its own."""
     found = []
-    for klass in p.with_role("Entity"):
+    selected = p.with_role("Entity")
+    for klass in selected:
         decorator = p.is_dataclass(klass)
         if decorator is not None and not (
             isinstance(decorator, ast.Call)
@@ -80,7 +79,7 @@ def py_002(p: Project) -> list[Finding]:
                     f"{klass.name} replaces the identity equality of Entity",
                 )
             )
-    return found
+    return Checked(len(selected), found)
 
 
 def _signature(method: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[str, ...]:
@@ -96,37 +95,41 @@ def _port_methods(p: Project, port: Klass) -> dict[str, tuple[str, ...]]:
     return out
 
 
+#: The ports the building blocks declare, each with the words a finding names it by: what the application needs from
+#: outside, and what the domain asks of the outside to obtain a fact it does not hold.
+PORT_KINDS = {"OutputPort": "output port", "DomainGateway": "domain gateway"}
+
+
 @rule("DCA-PY-003")
-def py_003(p: Project) -> list[Finding]:
-    """An output port is implemented by name: an adapter that fits its shape names it among its bases, and a port
-    has at least one class that does. An adapter that names an output port already is held to that one; another
-    port it happens to fit is a coincidence of shape, not a second implementation."""
+def py_003(p: Project) -> Checked:
+    """A port is implemented by name - an output port or a domain gateway: an adapter that fits its shape names it
+    among its bases, and a port has at least one class that does. An adapter that names a port already is held to
+    that one; another port it happens to fit is a coincidence of shape, not a second implementation."""
     found = []
-    ports = [k for k in p.with_role("OutputPort") if k.is_protocol]
+    ports = [(k, kind) for role, kind in PORT_KINDS.items() for k in p.with_role(role) if k.is_protocol]
+    protocols = [k for k, _ in ports]
     concrete = [k for k in p.classes.values() if not k.is_protocol]
-    named = {k.qualname for k in concrete if any(port.qualname in p.ancestors(k) for port in ports)}
-    for port in ports:
+    adapters = [k for k in concrete if k.place.layer in ("outgoing", "root")]
+    named = {k.qualname for k in concrete if any(port.qualname in p.ancestors(k) for port in protocols)}
+    for port, kind in ports:
         wanted = _port_methods(p, port)
         nominal = [k for k in concrete if port.qualname in p.ancestors(k)]
-        if not nominal and not any(port.qualname in p.ancestors(k) for k in ports if k is not port):
-            found.append(Finding(port.where(), f"no class names the output port {port.name} among its bases"))
+        if not nominal and not any(port.qualname in p.ancestors(k) for k in protocols if k is not port):
+            found.append(Finding(port.where(), f"no class names the {kind} {port.name} among its bases"))
         if not wanted:
             continue
-        for klass in concrete:
-            if klass.qualname in named or klass.place.layer not in ("outgoing", "root"):
+        for klass in adapters:
+            if klass.qualname in named:
                 continue
             own = {n: _signature(m) for n, m in klass.methods.items()}
             if all(own.get(n) == s for n, s in wanted.items()):
                 found.append(
                     Finding(
                         klass.where(),
-                        f"{klass.name} fits the output port {port.name} by its shape "
-                        "and does not name it among its bases",
+                        f"{klass.name} fits the {kind} {port.name} by its shape and does not name it among its bases",
                     )
                 )
-    for klass in concrete:
-        if klass.place.layer not in ("outgoing", "root"):
-            continue
+    for klass in adapters:
         roles = p.roles(klass)
         for block, methods in BB_PORTS.items():
             if methods <= set(klass.methods) and not roles & BB_PORT_FAMILY[block]:
@@ -137,7 +140,7 @@ def py_003(p: Project) -> list[Finding]:
                         "and does not name it among its bases",
                     )
                 )
-    return found
+    return Checked(len({k.qualname for k in protocols + adapters}), found)
 
 
 #: The building blocks' own ports by the methods an implementation must define, and the roles that already name
@@ -155,10 +158,11 @@ BB_PORT_FAMILY = {
 
 
 @rule("DCA-PY-004")
-def py_004(p: Project) -> list[Finding]:
+def py_004(p: Project) -> Checked:
     """The domain stays synchronous."""
     found = []
-    for module in p.in_layer("domain"):
+    selected = p.in_layer("domain")
+    for module in selected:
         for node in ast.walk(module.tree):
             if isinstance(node, ast.AsyncFunctionDef):
                 found.append(
@@ -170,14 +174,15 @@ def py_004(p: Project) -> list[Finding]:
                 names = [a.name for a in node.names] if isinstance(node, ast.Import) else [node.module or ""]
                 if any(n.split(".")[0] in ("asyncio", "trio", "anyio") for n in names):
                     found.append(Finding(module.where(node), f"{module.dotted} imports an async runtime"))
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-PY-005")
-def py_005(p: Project) -> list[Finding]:
+def py_005(p: Project) -> Checked:
     """The domain reads no clock and no randomness."""
     found = []
-    for module in p.in_layer("domain"):
+    selected = p.in_layer("domain")
+    for module in selected:
         for node in ast.walk(module.tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -186,7 +191,7 @@ def py_005(p: Project) -> list[Finding]:
                 found.append(
                     Finding(module.where(node), f"{module.dotted} calls {name}; the value comes in as a parameter")
                 )
-    return found
+    return Checked(len(selected), found)
 
 
 def _is_assert_never(body: list[ast.stmt]) -> bool:
@@ -201,10 +206,12 @@ def _is_assert_never(body: list[ast.stmt]) -> bool:
 
 
 @rule("DCA-PY-006")
-def py_006(p: Project) -> list[Finding]:
-    """A match over a closed result does not swallow a case it does not know: its wildcard is `assert_never`."""
+def py_006(p: Project) -> Checked:
+    """A match over a closed result does not swallow a case it does not know: its wildcard is `assert_never`.
+    Selects the matches that name a case of a closed result."""
     cases = {c.qualname for _, (_, cs) in closed_results(p).items() for c in cs}
     found = []
+    selected = 0
     for module in p.modules.values():
         for node in ast.walk(module.tree):
             if not isinstance(node, ast.Match):
@@ -218,6 +225,7 @@ def py_006(p: Project) -> list[Finding]:
                             named.add(klass.qualname)
             if not named & cases:
                 continue
+            selected += 1
             for case in node.cases:
                 wildcard = isinstance(case.pattern, ast.MatchAs) and case.pattern.pattern is None
                 if wildcard and not _is_assert_never(case.body):
@@ -228,19 +236,18 @@ def py_006(p: Project) -> list[Finding]:
                             "swallows every other case; end with case _: assert_never(...)",
                         )
                     )
-    return found
+    return Checked(selected, found)
 
 
 CANCELLED = ("BaseException", "asyncio.CancelledError", "CancelledError", "asyncio.exceptions.CancelledError")
 
 
 @rule("DCA-PY-007")
-def py_007(p: Project) -> list[Finding]:
+def py_007(p: Project) -> Checked:
     """Cancellation passes through: a handler that catches it raises again."""
     found = []
-    for module in p.modules.values():
-        if module.place.layer is None:
-            continue
+    selected = [m for m in p.modules.values() if m.place.layer is not None]
+    for module in selected:
         for node in ast.walk(module.tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
@@ -253,26 +260,25 @@ def py_007(p: Project) -> list[Finding]:
                 found.append(
                     Finding(module.where(node), f"{module.dotted} catches cancellation and does not raise it again")
                 )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-PY-008")
-def py_008(p: Project) -> list[Finding]:
+def py_008(p: Project) -> Checked:
     """A use case is implemented by name: a class of the application that executes names an input port among its
     bases, and every input port has a class that names it."""
     found = []
     ports = [k for k in p.with_role("InputPort") if k.is_protocol]
     concrete = [k for k in p.classes.values() if not k.is_protocol]
+    executing = [k for k in concrete if k.place.layer == "application" and "execute" in k.methods]
     for port in ports:
         named = any(port.qualname in p.ancestors(k) for k in concrete)
         narrowed = any(port.qualname in p.ancestors(k) for k in ports if k is not port)
         if not named and not narrowed:
             found.append(Finding(port.where(), f"no class names the input port {port.name} among its bases"))
-    for klass in concrete:
-        if klass.place.layer != "application" or "execute" not in klass.methods:
-            continue
+    for klass in executing:
         if "InputPort" not in p.roles(klass):
             found.append(
                 Finding(klass.where(), f"{klass.name} executes a use case and names no input port among its bases")
             )
-    return found
+    return Checked(len(ports) + len(executing), found)

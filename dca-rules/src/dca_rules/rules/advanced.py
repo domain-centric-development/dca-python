@@ -6,7 +6,7 @@ from __future__ import annotations
 import ast
 
 from dca_rules.model import Klass, Project, parameters, public
-from dca_rules.rules import Finding, rule
+from dca_rules.rules import Checked, Finding, rule
 from dca_rules.rules.tactical import is_leaf
 
 VERSION_FIELDS = ("schema_version", "event_version", "contract_version")
@@ -25,12 +25,15 @@ def framework_metadata(p: Project, klass: Klass) -> list[tuple[ast.AST, str]]:
     return out
 
 
-def _metadata(p: Project, classes: list[Klass], what: str) -> list[Finding]:
-    return [
-        Finding(k.module.where(node), f"the {what} {k.name} carries {name}")
-        for k in classes
-        for node, name in framework_metadata(p, k)
-    ]
+def _metadata(p: Project, classes: list[Klass], what: str) -> Checked:
+    return Checked(
+        len(classes),
+        [
+            Finding(k.module.where(node), f"the {what} {k.name} carries {name}")
+            for k in classes
+            for node, name in framework_metadata(p, k)
+        ],
+    )
 
 
 def in_domain(p: Project, role: str) -> list[Klass]:
@@ -38,7 +41,7 @@ def in_domain(p: Project, role: str) -> list[Klass]:
 
 
 @rule("DCA-ONI-003")
-def oni_003(p: Project) -> list[Finding]:
+def oni_003(p: Project) -> Checked:
     return _metadata(p, p.classes_in("domain"), "domain type")
 
 
@@ -54,40 +57,43 @@ def _immutable(p: Project, klass: Klass) -> list[Finding]:
 
 
 @rule("DCA-ADV-001")
-def adv_001(p: Project) -> list[Finding]:
+def adv_001(p: Project) -> Checked:
+    named = [k for k in p.classes_in("domain") if k.name.endswith("Event") and not k.is_protocol]
+    events = p.with_role("DomainEvent")
     found = [
         Finding(k.where(), f"{k.name} is named an event and does not extend DomainEvent")
-        for k in p.classes_in("domain")
-        if k.name.endswith("Event")
-        and not k.is_protocol
-        and not p.roles(k) & {"DomainEvent", "IntegrationEvent"}
+        for k in named
+        if not p.roles(k) & {"DomainEvent", "IntegrationEvent"}
         and not any(a.startswith("enum.") for a in p.ancestors(k))
     ]
-    for event in p.with_role("DomainEvent"):
+    for event in events:
         found += _immutable(p, event)
-    return found
+    return Checked(len({k.qualname for k in named + events}), found)
 
 
 @rule("DCA-ADV-002")
-def adv_002(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the domain event {k.name} sits in {k.module.dotted}, outside the domain")
-        for k in p.with_role("DomainEvent")
-        if k.place.layer != "domain"
-    ]
+def adv_002(p: Project) -> Checked:
+    selected = p.with_role("DomainEvent")
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the domain event {k.name} sits in {k.module.dotted}, outside the domain")
+            for k in selected
+            if k.place.layer != "domain"
+        ],
+    )
 
 
 @rule("DCA-ADV-004")
-def adv_004(p: Project) -> list[Finding]:
+def adv_004(p: Project) -> Checked:
     return _metadata(p, in_domain(p, "DomainEvent"), "domain event")
 
 
 @rule("DCA-ADV-005")
-def adv_005(p: Project) -> list[Finding]:
+def adv_005(p: Project) -> Checked:
     found = []
-    for event in p.with_role("IntegrationEvent"):
-        if not is_leaf(p, event):
-            continue
+    selected = [e for e in p.with_role("IntegrationEvent") if is_leaf(p, e)]
+    for event in selected:
         if not any(k.arg == "event_type" for k in event.node.keywords):
             found.append(
                 Finding(
@@ -96,96 +102,107 @@ def adv_005(p: Project) -> list[Finding]:
                     "IntegrationEvent, event_type=..., version=...)",
                 )
             )
-    return found
+    return Checked(len(selected), found)
 
 
-def _version_fields(p: Project, classes: list[Klass]) -> list[Finding]:
-    return [
-        Finding(k.module.where(f.line), f"{k.name}.{f.name} carries a schema version in the payload")
-        for k in classes
-        for f in k.fields
-        if f.name in VERSION_FIELDS
-    ]
+def _version_fields(p: Project, classes: list[Klass]) -> Checked:
+    return Checked(
+        len(classes),
+        [
+            Finding(k.module.where(f.line), f"{k.name}.{f.name} carries a schema version in the payload")
+            for k in classes
+            for f in k.fields
+            if f.name in VERSION_FIELDS
+        ],
+    )
 
 
 @rule("DCA-ADV-006")
-def adv_006(p: Project) -> list[Finding]:
+def adv_006(p: Project) -> Checked:
     return _version_fields(p, p.with_role("IntegrationEvent"))
 
 
 @rule("DCA-ADV-007")
-def adv_007(p: Project) -> list[Finding]:
+def adv_007(p: Project) -> Checked:
     return _version_fields(p, [k for k in p.with_role("DomainEvent") if not p.has(k, "IntegrationEvent")])
 
 
 @rule("DCA-ADV-008")
-def adv_008(p: Project) -> list[Finding]:
+def adv_008(p: Project) -> Checked:
     found = []
     wanted = set(p.layout.timestamp_types)
-    for event in p.with_role("DomainEvent"):
-        if not is_leaf(p, event):
-            continue
+    selected = [e for e in p.with_role("DomainEvent") if is_leaf(p, e)]
+    for event in selected:
         chain = [event, *[p.classes[a] for a in p.ancestors(event) if a in p.classes]]
         names = {n.rsplit(".", 1)[-1] for k in chain for f in k.fields for n in p.type_names(k.module, f.annotation)}
         if not names & wanted:
             found.append(Finding(event.where(), f"{event.name} holds no timestamp field ({', '.join(sorted(wanted))})"))
-    return found
+    return Checked(len(selected), found)
 
 
-def _placed(p: Project, role: str, what: str) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the {what} {k.name} sits in {k.module.dotted}, outside the domain")
-        for k in p.with_role(role)
-        if k.place.layer != "domain"
-    ]
+def _placed(p: Project, role: str, what: str) -> Checked:
+    selected = p.with_role(role)
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the {what} {k.name} sits in {k.module.dotted}, outside the domain")
+            for k in selected
+            if k.place.layer != "domain"
+        ],
+    )
 
 
-def _stateless(p: Project, role: str, what: str) -> list[Finding]:
+def _stateless(p: Project, role: str, what: str) -> Checked:
     found = []
-    for klass in p.with_role(role):
+    selected = p.with_role(role)
+    for klass in selected:
         found += [
             Finding(klass.module.where(node), f"the {what} {klass.name} keeps state: {name} assigns to self")
             for name, node in p.mutators(klass)
         ]
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-ADV-010")
-def adv_010(p: Project) -> list[Finding]:
+def adv_010(p: Project) -> Checked:
     return _placed(p, "DomainService", "domain service")
 
 
 @rule("DCA-ADV-011")
-def adv_011(p: Project) -> list[Finding]:
+def adv_011(p: Project) -> Checked:
     return _metadata(p, in_domain(p, "DomainService"), "domain service")
 
 
 @rule("DCA-ADV-012")
-def adv_012(p: Project) -> list[Finding]:
+def adv_012(p: Project) -> Checked:
     return _stateless(p, "DomainService", "domain service")
 
 
 @rule("DCA-ADV-013")
-def adv_013(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the factory {k.name} is not named *Factory")
-        for k in p.with_role("Factory")
-        if not k.name.endswith("Factory")
-    ]
+def adv_013(p: Project) -> Checked:
+    selected = p.with_role("Factory")
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the factory {k.name} is not named *Factory")
+            for k in selected
+            if not k.name.endswith("Factory")
+        ],
+    )
 
 
 @rule("DCA-ADV-014")
-def adv_014(p: Project) -> list[Finding]:
+def adv_014(p: Project) -> Checked:
     return _placed(p, "Factory", "factory")
 
 
 @rule("DCA-ADV-015")
-def adv_015(p: Project) -> list[Finding]:
+def adv_015(p: Project) -> Checked:
     return _metadata(p, in_domain(p, "Factory"), "factory")
 
 
 @rule("DCA-ADV-016")
-def adv_016(p: Project) -> list[Finding]:
+def adv_016(p: Project) -> Checked:
     return _stateless(p, "Factory", "factory")
 
 
@@ -194,25 +211,28 @@ def specifications(p: Project) -> list[Klass]:
 
 
 @rule("DCA-ADV-017")
-def adv_017(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the specification {k.name} sits in {k.module.dotted}, outside the domain")
-        for k in specifications(p)
-        if k.place.layer != "domain"
-    ]
+def adv_017(p: Project) -> Checked:
+    selected = specifications(p)
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the specification {k.name} sits in {k.module.dotted}, outside the domain")
+            for k in selected
+            if k.place.layer != "domain"
+        ],
+    )
 
 
 @rule("DCA-ADV-018")
-def adv_018(p: Project) -> list[Finding]:
+def adv_018(p: Project) -> Checked:
     return _metadata(p, [k for k in specifications(p) if k.place.layer == "domain"], "specification")
 
 
 @rule("DCA-ADV-019")
-def adv_019(p: Project) -> list[Finding]:
+def adv_019(p: Project) -> Checked:
     found = []
-    for klass in p.classes.values():
-        if not p.roles(klass) & {"Entity", "Value"}:
-            continue
+    selected = [k for k in p.classes.values() if p.roles(k) & {"Entity", "Value"}]
+    for klass in selected:
         for method in klass.methods.values():
             for node in ast.walk(method):
                 if not isinstance(node, ast.Call):
@@ -225,13 +245,14 @@ def adv_019(p: Project) -> list[Finding]:
                             klass.module.where(node), f"{klass.name}.{method.name} uses the domain service {used.name}"
                         )
                     )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-ADV-020")
-def adv_020(p: Project) -> list[Finding]:
+def adv_020(p: Project) -> Checked:
     found = []
-    for service in p.with_role("DomainService"):
+    selected = p.with_role("DomainService")
+    for service in selected:
         for name, method in service.methods.items():
             if not public(name):
                 continue
@@ -240,4 +261,4 @@ def adv_020(p: Project) -> list[Finding]:
                 found.append(
                     Finding(service.module.where(method), f"{service.name}.{name} takes no aggregate and no entity")
                 )
-    return found
+    return Checked(len(selected), found)

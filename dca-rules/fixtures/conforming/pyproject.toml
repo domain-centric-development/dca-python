@@ -2,3 +2,12 @@
 [tool.dca]
 base-package = "fx"
 experimental = "all"
+# What the project legitimately lacks: a rule over these selects nothing, and the project says why.
+allow-empty = [
+    { rule = "DCA-MAP-002", reason = "no context depends on a system outside this code base" },
+    { rule = "DCA-MAP-010", reason = "no context depends on a system outside this code base" },
+    { rule = "DCA-MAP-012", reason = "no two contexts evolve as partners" },
+    { rule = "DCA-NAM-007", reason = "the adapters translate without DTO classes" },
+    { rule = "DCA-NAM-008", reason = "the adapters translate without converter classes" },
+    { rule = "DCA-PY-001", reason = "the model's values and events are frozen by their base; no domain class is a dataclass" },
+]
