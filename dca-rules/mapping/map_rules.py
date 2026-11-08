@@ -374,7 +374,10 @@ MAPPING = {
         "id whose one field is value, exceptions, enums.",
         "No field, parameter of a public method or return annotation names str, int, float, bytes, "
         "complex, a datetime type, timedelta or uuid.UUID. A private bool field - a single yes/no fact - "
-        "and a bool return - a predicate - pass; a bool parameter and a public bool field do not.",
+        "and a bool return - a predicate - pass; a bool parameter and a public bool field do not. A bool "
+        "parameter of the factory that rebuilds a stored object - a class or static method annotated to "
+        "return the class or Self, named as [tool.dca] reconstituting-factories lists, reconstitute and "
+        "restore by default, case ignored - passes; its other parameters are checked.",
     ),
     "DCA-TAC-026": m(
         AT,

@@ -59,14 +59,20 @@ class Part(Entity[PartId]):
 
 
 class Thing(AggregateRoot[ThingId], Owned[OwnerId]):
-    def __init__(self, thing_id: ThingId, owner: OwnerId, parts: list[Part]) -> None:
+    def __init__(self, thing_id: ThingId, owner: OwnerId, parts: list[Part], archived: bool = False) -> None:
         self._id = thing_id
         self._owner = owner
         self._parts = parts
+        self._archived = archived
 
     @classmethod
     def create(cls, thing_id: ThingId, owner: OwnerId) -> Thing:
         return cls(thing_id, owner, [])
+
+    @classmethod
+    def reconstitute(cls, thing_id: ThingId, owner: OwnerId, parts: list[Part], archived: bool) -> Thing:
+        """Rebuilds a stored thing; its yes/no fact comes back as the bool it was."""
+        return cls(thing_id, owner, parts, archived)
 
     @property
     def id(self) -> ThingId:

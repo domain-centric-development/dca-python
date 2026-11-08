@@ -79,6 +79,20 @@ class Thing(AggregateRoot[ThingId], Owned):  # DCA-TAC-026: Owned without the ow
         self.label = label
 
 
+class Lamp:
+    """A yes/no fact in a private field passes; the reconstituting factory takes it back, its bare count does not."""
+
+    def __init__(self, lit: bool) -> None:
+        self._lit = lit
+
+    @classmethod
+    def restore(cls, lit: bool, hours: int) -> Lamp:  # DCA-TAC-025: the count; the bool is the stored fact
+        return cls(lit)
+
+    def switch(self, lit: bool) -> None:  # DCA-TAC-025: a flag argument
+        self._lit = lit
+
+
 class Other(AggregateRoot[OtherId]):  # DCA-TAC-004: no field holds its id
     @property
     def id(self) -> OtherId:

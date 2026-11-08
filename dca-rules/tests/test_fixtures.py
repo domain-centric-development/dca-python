@@ -7,6 +7,7 @@ is a project without a context or a layer; `fixtures/conforming` follows every r
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import pathlib
 import subprocess
@@ -64,6 +65,19 @@ def test_no_rule_finds_anything_in_the_conforming_fixture() -> None:
         f"[{r}] {f.location}: {f.message}" for r in implemented() if r not in LISTINGS for f in findings(project, r)
     ]
     assert not found, "findings in a project that follows every rule:\n" + "\n".join(found)
+
+
+def test_a_reconstituting_factory_takes_its_yes_no_fact_back() -> None:
+    lamp = [f.message for f in findings(fixture("violations"), "DCA-TAC-025") if f.message.startswith("Lamp.")]
+    assert "Lamp.restore(hours) takes int" in lamp
+    assert "Lamp.switch(lit) takes bool" in lamp
+    assert not [m for m in lamp if m.startswith("Lamp.restore(lit)")]
+
+
+def test_the_reconstituting_factory_follows_the_configured_names() -> None:
+    layout = DcaLayout.from_pyproject(FIXTURES / "conforming" / "pyproject.toml")
+    renamed = Project(dataclasses.replace(layout, reconstituting_factories=("rehydrate",)))
+    assert [f.message for f in findings(renamed, "DCA-TAC-025")] == ["Thing.reconstitute(archived) takes bool"]
 
 
 @pytest.mark.parametrize(

@@ -386,6 +386,14 @@ def _bare(p: Project, klass: Klass, annotation: ast.expr | None) -> list[str]:
     )
 
 
+def _rebuilds(p: Project, klass: Klass, name: str, method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """The factory that rebuilds a stored object: a class or static method named as configured, returning the class."""
+    factory = any(isinstance(d, ast.Name) and d.id in ("classmethod", "staticmethod") for d in method.decorator_list)
+    returned = method.returns
+    returns_class = returned is not None and (ast.unparse(returned).strip("'\"") in (klass.name, "Self", "typing.Self"))
+    return factory and returns_class and name.lower() in {n.lower() for n in p.layout.reconstituting_factories}
+
+
 @rule("DCA-TAC-025")
 def tac_025(p: Project) -> list[Finding]:
     found = []
@@ -413,8 +421,11 @@ def tac_025(p: Project) -> list[Finding]:
         for name, method in klass.methods.items():
             if is_dunder(name) or not public(name):
                 continue
+            rebuilds = _rebuilds(p, klass, name, method)
             for argument in parameters(method):
                 bare = _bare(p, klass, argument.annotation)
+                if rebuilds and bare == ["bool"]:
+                    continue
                 if bare:
                     found.append(
                         Finding(

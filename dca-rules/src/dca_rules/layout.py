@@ -73,6 +73,9 @@ class DcaLayout:
     frameworks: tuple[str, ...] = FRAMEWORKS
     allowed_in_domain: tuple[str, ...] = ()
     timestamp_types: tuple[str, ...] = ("Timestamp", "datetime")
+    #: The class or static method that rebuilds a stored domain object, matched ignoring case: DCA-TAC-025 lets it
+    #: take a `bool` - the stored yes/no fact handed back, no flag argument. Empty exempts no factory.
+    reconstituting_factories: tuple[str, ...] = ("reconstitute", "restore")
     router_methods: tuple[str, ...] = ROUTER_METHODS
     listener_decorators: tuple[str, ...] = ()
     authorization_decorators: tuple[str, ...] = AUTHORIZATION
