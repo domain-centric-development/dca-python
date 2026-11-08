@@ -254,3 +254,25 @@ def py_007(p: Project) -> list[Finding]:
                     Finding(module.where(node), f"{module.dotted} catches cancellation and does not raise it again")
                 )
     return found
+
+
+@rule("DCA-PY-008")
+def py_008(p: Project) -> list[Finding]:
+    """A use case is implemented by name: a class of the application that executes names an input port among its
+    bases, and every input port has a class that names it."""
+    found = []
+    ports = [k for k in p.with_role("InputPort") if k.is_protocol]
+    concrete = [k for k in p.classes.values() if not k.is_protocol]
+    for port in ports:
+        named = any(port.qualname in p.ancestors(k) for k in concrete)
+        narrowed = any(port.qualname in p.ancestors(k) for k in ports if k is not port)
+        if not named and not narrowed:
+            found.append(Finding(port.where(), f"no class names the input port {port.name} among its bases"))
+    for klass in concrete:
+        if klass.place.layer != "application" or "execute" not in klass.methods:
+            continue
+        if "InputPort" not in p.roles(klass):
+            found.append(
+                Finding(klass.where(), f"{klass.name} executes a use case and names no input port among its bases")
+            )
+    return found

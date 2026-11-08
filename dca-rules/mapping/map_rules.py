@@ -917,6 +917,19 @@ PYTHON_ONLY = [
         selects="except clauses in every module that sits in a layer.",
         checks="A bare except, an except BaseException and an except CancelledError raises again.",
     ),
+    dict(
+        id="DCA-PY-008",
+        title="A use case is implemented by name",
+        rationale="UseCase is a Protocol: a class with an execute method fits an input port without naming it, and "
+        "the rules - which read roles from bases - see no use case at all; every rule over use cases then selects "
+        "nothing. An input port nobody names is a port the rules cannot follow to its use case.",
+        category=AT,
+        enforcement=[S],
+        selects="Protocol classes that carry the InputPort role, and the classes of the application with an execute "
+        "method.",
+        checks="Every input port is named among the bases of some class or of a narrower port; every class of the "
+        "application with an execute method names an input port among its bases.",
+    ),
 ]
 
 
