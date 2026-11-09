@@ -14,8 +14,10 @@ from dca_rules.model import Project
 
 
 def architecture_tests(pyproject: str | pathlib.Path = "pyproject.toml") -> Callable[[str], None]:
-    """A test function parametrized over every implemented rule. A finding fails its case; an informational
-    rule prints its list; an experimental rule not switched on in `[tool.dca] experimental` is skipped."""
+    """A test function parametrized over every implemented rule. A finding fails its case; so does a rule that
+    selected nothing, unless `[tool.dca] allow-empty` names it with a reason - then it passes and prints the reason.
+    An informational rule prints its list and never fails; an experimental rule not switched on in
+    `[tool.dca] experimental` is skipped."""
     path = pathlib.Path(pyproject)
 
     @functools.cache
@@ -28,11 +30,13 @@ def architecture_tests(pyproject: str | pathlib.Path = "pyproject.toml") -> Call
     @pytest.mark.parametrize("rule_id", implemented())
     def test_dca(rule_id: str) -> None:
         outcome = run(project(), rule_id)
-        if outcome.kind != "ran":
-            pytest.skip(f"[{rule_id}] {outcome.kind}: switch it on in [tool.dca] experimental")
-        if outcome.informational:
-            print(report(rule_id, outcome))
-        elif outcome.findings:
+        if outcome.kind == "experimental":
+            pytest.skip(f"[{rule_id}] experimental: switch it on in [tool.dca] experimental")
+        if outcome.kind == "disabled":
+            pytest.skip(f"[{rule_id}] disabled in [tool.dca] disabled")
+        if outcome.fails:
             pytest.fail(report(rule_id, outcome), pytrace=False)
+        if outcome.informational or outcome.kind == "empty" or outcome.allowed is not None:
+            print(report(rule_id, outcome))
 
     return test_dca

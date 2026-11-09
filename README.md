@@ -60,6 +60,20 @@ A violation fails its case with one line per finding, the rule id first:
 [DCA-TAC-003] src/orders/billing/domain/invoice.py:14: Invoice.customer holds the aggregate root Customer; reference another aggregate by its id
 ```
 
+A rule selects the elements of the concept it governs — by role, by layer or by name — and holds over them. Where
+it selects nothing, it did not hold: it reports `nothing selected` and fails its case, so a missing marker cannot
+pass as green. A project that has none of a concept on purpose says so once, with the reason:
+
+```toml
+[tool.dca]
+allow-empty = [
+    { rule = "DCA-ADV-013", reason = "every aggregate is built by its own class; no factory" },
+]
+```
+
+An open host service of functions — an `api` package without a facade class — declares itself in its package, as a
+context does: `__dca__ = OpenHostService()` in its `__init__.py`.
+
 `python -m dca_rules [pyproject.toml] [DCA-…]` prints the same from the command line. Closed use-case results —
 `type ReserveResult = Reserved | SeatTaken` with the refusal marked `Refusal` — are checked for exhaustiveness by
 the type checker, so a project runs `mypy --strict` (or pyright) beside the suite and ends every match over a

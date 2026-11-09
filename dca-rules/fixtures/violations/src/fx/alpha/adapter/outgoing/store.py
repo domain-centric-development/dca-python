@@ -22,3 +22,8 @@ class ShapePublisher:  # DCA-PY-003: fits DomainEventPublisher by its shape, nam
 
 def export(pricing: Pricing, label: Label) -> Label:
     return pricing.price(label)  # DCA-ADV-021: an outgoing adapter computes with a domain service
+
+
+class ShapeRatings:  # DCA-PY-003: fits the domain gateway Ratings by its shape, names it nowhere
+    def rating_of(self, key: str) -> bool:
+        return bool(key)

@@ -1,4 +1,10 @@
-"""The rules, one function per id, registered by `@rule`. Each takes the project and returns its findings."""
+"""The rules, one function per id, registered by `@rule`. Each takes the project and returns what it checked: the size
+of its selection and its findings.
+
+The selection is every element of the concept the rule governs - by role, by layer or by name: the aggregate roots
+for a rule about roots, the modules of the domain for a rule about the domain's imports, the classes named `*Dto` for
+a rule about DTOs. A rule whose selection is empty held over nothing; the runner reports it as `nothing selected`,
+never as passed."""
 
 from __future__ import annotations
 
@@ -14,15 +20,27 @@ class Finding:
     message: str
 
 
-Check = Callable[[Project], list[Finding]]
+@dataclasses.dataclass(frozen=True)
+class Checked:
+    """What one rule saw: how many elements its selection holds, and what it found among them."""
+
+    selected: int
+    findings: list[Finding]
+
+
+Check = Callable[[Project], Checked]
 RULES: dict[str, Check] = {}
+#: Rules that carry doctrine only and select nothing by design: their empty selection is no gap.
+DOCTRINE: set[str] = set()
 
 
-def rule(rule_id: str) -> Callable[[Check], Check]:
+def rule(rule_id: str, *, doctrine: bool = False) -> Callable[[Check], Check]:
     def register(check: Check) -> Check:
         if rule_id in RULES:
             raise ValueError(f"{rule_id} registered twice")
         RULES[rule_id] = check
+        if doctrine:
+            DOCTRINE.add(rule_id)
         return check
 
     return register
@@ -61,7 +79,9 @@ from dca_rules.rules import (  # noqa: E402
 )
 
 __all__ = [
+    "DOCTRINE",
     "RULES",
+    "Checked",
     "Finding",
     "advanced",
     "contextmap",

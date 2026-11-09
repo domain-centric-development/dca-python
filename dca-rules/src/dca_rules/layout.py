@@ -84,6 +84,14 @@ class DcaLayout:
     building_blocks: tuple[str, ...] = ()
     experimental: tuple[str, ...] | typing.Literal["all"] = ()
     disabled: tuple[str, ...] = ()
+    #: (rule id, reason) for every rule this project lets select nothing: a statement about the project ("no class
+    #: is a factory"), written in `[tool.dca]` as `allow-empty = [{ rule = "DCA-ADV-013", reason = "..." }]`.
+    allow_empty: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        for rule_id, reason in self.allow_empty:
+            if not reason.strip():
+                raise ValueError(f"allow-empty names {rule_id} without a reason")
 
     @property
     def package_dir(self) -> pathlib.Path:
@@ -91,6 +99,10 @@ class DcaLayout:
 
     def experimental_on(self, rule_id: str) -> bool:
         return self.experimental == "all" or rule_id in self.experimental
+
+    def allowed_empty(self, rule_id: str) -> str | None:
+        """The reason this project gives for the rule to select nothing, or None when it gives none."""
+        return next((reason for allowed, reason in self.allow_empty if allowed == rule_id), None)
 
     @classmethod
     def from_pyproject(cls, path: str | pathlib.Path = "pyproject.toml") -> DcaLayout:
@@ -106,7 +118,24 @@ class DcaLayout:
             if field.name == "project_root" or key not in table:
                 continue
             raw = table[key]
+            if field.name == "allow_empty":
+                values[field.name] = _allow_empty(file, raw)
+                continue
             values[field.name] = tuple(raw) if isinstance(raw, list) else raw
         if "extra-frameworks" in table:
             values["frameworks"] = tuple(values.get("frameworks", FRAMEWORKS)) + tuple(table["extra-frameworks"])
         return cls(project_root=file.parent, **values)
+
+
+def _allow_empty(file: pathlib.Path, raw: object) -> tuple[tuple[str, str], ...]:
+    """`allow-empty = [{ rule = "DCA-...", reason = "..." }, ...]`: every entry names its rule and why."""
+    if not isinstance(raw, list):
+        raise ValueError(f"{file}: allow-empty is a list of {{ rule = ..., reason = ... }}")
+    out = []
+    for entry in raw:
+        rule_id = entry.get("rule") if isinstance(entry, dict) else None
+        reason = entry.get("reason") if isinstance(entry, dict) else None
+        if not isinstance(rule_id, str) or not isinstance(reason, str) or not reason.strip():
+            raise ValueError(f"{file}: allow-empty takes {{ rule = ..., reason = ... }}, a reason given, not {entry!r}")
+        out.append((rule_id, reason))
+    return tuple(out)

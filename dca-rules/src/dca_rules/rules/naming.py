@@ -6,7 +6,7 @@ import ast
 import re
 
 from dca_rules.model import Klass, Project, public
-from dca_rules.rules import Finding, rule
+from dca_rules.rules import Checked, Finding, rule
 from dca_rules.rules.hexagonal import is_use_case
 
 BUCKETS = ("entities", "entity", "value_objects", "valueobjects", "helpers", "helper", "util", "utils")
@@ -20,76 +20,101 @@ def input_ports(p: Project) -> list[Klass]:
 
 
 @rule("DCA-NAM-001")
-def nam_001(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the use case {k.name} does not end with UseCase")
-        for k in p.classes_in("application")
-        if is_use_case(p, k) and not k.name.endswith("UseCase")
-    ]
+def nam_001(p: Project) -> Checked:
+    selected = [k for k in p.classes_in("application") if is_use_case(p, k)]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the use case {k.name} does not end with UseCase")
+            for k in selected
+            if not k.name.endswith("UseCase")
+        ],
+    )
 
 
 @rule("DCA-NAM-003")
-def nam_003(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the input port {k.name} does not end with InputPort")
-        for k in input_ports(p)
-        if k.place.layer == "application" and not k.name.endswith("InputPort")
-    ]
+def nam_003(p: Project) -> Checked:
+    selected = [k for k in input_ports(p) if k.place.layer == "application"]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the input port {k.name} does not end with InputPort")
+            for k in selected
+            if not k.name.endswith("InputPort")
+        ],
+    )
 
 
 @rule("DCA-NAM-004")
-def nam_004(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"{k.name} names a repository and does not end with Repository")
-        for k in p.classes_in("application")
-        if "Repository" in k.name and not k.name.endswith("Repository")
-    ]
+def nam_004(p: Project) -> Checked:
+    selected = [k for k in p.classes_in("application") if "Repository" in k.name or p.has(k, "Repository")]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"{k.name} names a repository and does not end with Repository")
+            for k in selected
+            if "Repository" in k.name and not k.name.endswith("Repository")
+        ],
+    )
 
 
-def _suffix_in(p: Project, suffix: str, layers: tuple[str, ...], where: str) -> list[Finding]:
-    return [
-        Finding(k.where(), f"{k.name} sits in {k.module.dotted}, outside {where}")
-        for k in p.classes.values()
-        if k.name.lower().endswith(suffix.lower()) and k.place.layer not in layers
-    ]
+def _suffix_in(p: Project, suffix: str, layers: tuple[str, ...], where: str) -> Checked:
+    selected = [k for k in p.classes.values() if k.name.lower().endswith(suffix.lower())]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"{k.name} sits in {k.module.dotted}, outside {where}")
+            for k in selected
+            if k.place.layer not in layers
+        ],
+    )
 
 
 @rule("DCA-NAM-007")
-def nam_007(p: Project) -> list[Finding]:
+def nam_007(p: Project) -> Checked:
     return _suffix_in(p, "Dto", ("incoming", "outgoing", "adapter"), "the adapters")
 
 
 @rule("DCA-NAM-008")
-def nam_008(p: Project) -> list[Finding]:
+def nam_008(p: Project) -> Checked:
     return _suffix_in(p, "Converter", ("incoming", "outgoing", "adapter"), "the adapters")
 
 
 @rule("DCA-NAM-009")
-def nam_009(p: Project) -> list[Finding]:
+def nam_009(p: Project) -> Checked:
     found = []
-    for module in p.modules.values():
+    selected = [m for m in p.modules.values() if m.place.context or m.place.kernel]
+    for module in selected:
         last = module.dotted.rsplit(".", 1)[-1]
-        if last in BUCKETS and (module.place.context or module.place.kernel):
+        if last in BUCKETS:
             found.append(Finding(module.where(1), f"{module.dotted} is a technical bucket; package by domain concept"))
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-NAM-010")
-def nam_010(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the domain class {k.name} carries a technical suffix")
-        for k in p.classes_in("domain")
-        if k.name.endswith(TECHNICAL)
-    ]
+def nam_010(p: Project) -> Checked:
+    selected = p.classes_in("domain")
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the domain class {k.name} carries a technical suffix")
+            for k in selected
+            if k.name.endswith(TECHNICAL)
+        ],
+    )
 
 
 @rule("DCA-NAM-011")
-def nam_011(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"{k.name} sits in {k.module.dotted}, outside the incoming web adapter")
-        for k in p.classes.values()
-        if k.name.endswith("ViewModel") and not (k.place.layer == "incoming" and k.place.sub == p.layout.web)
-    ]
+def nam_011(p: Project) -> Checked:
+    selected = [k for k in p.classes.values() if k.name.endswith("ViewModel")]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"{k.name} sits in {k.module.dotted}, outside the incoming web adapter")
+            for k in selected
+            if not (k.place.layer == "incoming" and k.place.sub == p.layout.web)
+        ],
+    )
 
 
 def _ports_and_use_cases(p: Project) -> list[Klass]:
@@ -97,22 +122,27 @@ def _ports_and_use_cases(p: Project) -> list[Klass]:
 
 
 @rule("DCA-NAM-012")
-def nam_012(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"{k.name} is named after a trigger, not after its effect")
-        for k in _ports_and_use_cases(p)
-        if TRIGGER.match(k.name)
-    ]
+def nam_012(p: Project) -> Checked:
+    selected = _ports_and_use_cases(p)
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"{k.name} is named after a trigger, not after its effect")
+            for k in selected
+            if TRIGGER.match(k.name)
+        ],
+    )
 
 
 @rule("DCA-NAM-013")
-def nam_013(p: Project) -> list[Finding]:
+def nam_013(p: Project) -> Checked:
+    """Selects the input ports and use cases, and the modules of the api packages."""
+    ports = _ports_and_use_cases(p)
+    published = p.in_layer("api")
     found = [
-        Finding(k.where(), f"{k.name} is named after a field it writes")
-        for k in _ports_and_use_cases(p)
-        if FIELD_WRITE.match(k.name)
+        Finding(k.where(), f"{k.name} is named after a field it writes") for k in ports if FIELD_WRITE.match(k.name)
     ]
-    for module in p.in_layer("api"):
+    for module in published:
         for node in module.tree.body:
             if (
                 isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -122,4 +152,4 @@ def nam_013(p: Project) -> list[Finding]:
                 found.append(
                     Finding(module.where(node), f"the published operation {node.name} is named after a field it writes")
                 )
-    return found
+    return Checked(len(ports) + len(published), found)

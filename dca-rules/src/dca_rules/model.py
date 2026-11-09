@@ -242,6 +242,16 @@ class Project:
                     return node.value
         return None
 
+    def module_markers(self, marker: str) -> list[tuple[Module, ast.Call]]:
+        """(module, its `__dca__ = <marker>()` call) for every module that declares the building block `marker` as a
+        module: an open host service of functions marks its package so, as a context marks its own."""
+        out = []
+        for module in self.modules.values():
+            call = self.declaration(module)
+            if call is not None and self.resolve(module, call.func) == f"{BB}.{marker}":
+                out.append((module, call))
+        return out
+
     def declared_contexts(self) -> dict[str, str]:
         """{package: declared name} of the contexts that carry a BoundedContext declaration."""
         out = {}

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 
 from dca_rules.model import BB, Klass, Module, Project
-from dca_rules.rules import Finding, rule
+from dca_rules.rules import Checked, Finding, rule
 from dca_rules.rules.advanced import framework_metadata
 from dca_rules.rules.hexagonal import named_classes
 
@@ -28,16 +28,21 @@ def failures(p: Project) -> list[Klass]:
 
 
 @rule("DCA-ERR-001")
-def err_001(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the exception {k.name} in the domain does not extend DomainException")
-        for k in p.classes_in("domain")
-        if is_exception(p, k) and not p.has(k, "DomainException")
-    ]
+def err_001(p: Project) -> Checked:
+    selected = [k for k in p.classes_in("domain") if is_exception(p, k)]
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the exception {k.name} in the domain does not extend DomainException")
+            for k in selected
+            if not p.has(k, "DomainException")
+        ],
+    )
 
 
 @rule("DCA-ERR-002")
-def err_002(p: Project) -> list[Finding]:
+def err_002(p: Project) -> Checked:
+    selected = failures(p)
     found = [
         Finding(k.where(), f"the domain exception {k.name} sits in {k.module.dotted}, outside the domain")
         for k in p.with_role("DomainException")
@@ -48,37 +53,49 @@ def err_002(p: Project) -> list[Finding]:
         for k in p.with_role("PortException")
         if k.place.layer != "application"
     ]
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-ERR-003")
-def err_003(p: Project) -> list[Finding]:
-    return [
-        Finding(
-            k.where(),
-            f"the exception {k.name} in the application extends neither UseCaseException nor OutputPortException",
-        )
-        for k in p.classes_in("application")
-        if is_exception(p, k) and not p.has(k, "DomainException") and not p.roles(k) & PORT_FAILURES
-    ]
+def err_003(p: Project) -> Checked:
+    selected = [k for k in p.classes_in("application") if is_exception(p, k)]
+    return Checked(
+        len(selected),
+        [
+            Finding(
+                k.where(),
+                f"the exception {k.name} in the application extends neither UseCaseException nor OutputPortException",
+            )
+            for k in selected
+            if not p.has(k, "DomainException") and not p.roles(k) & PORT_FAILURES
+        ],
+    )
 
 
 @rule("DCA-ERR-004")
-def err_004(p: Project) -> list[Finding]:
-    return [
-        Finding(k.module.where(node), f"the failure {k.name} carries {name}")
-        for k in failures(p)
-        for node, name in framework_metadata(p, k)
-    ]
+def err_004(p: Project) -> Checked:
+    selected = failures(p)
+    return Checked(
+        len(selected),
+        [
+            Finding(k.module.where(node), f"the failure {k.name} carries {name}")
+            for k in selected
+            for node, name in framework_metadata(p, k)
+        ],
+    )
 
 
 @rule("DCA-ERR-005")
-def err_005(p: Project) -> list[Finding]:
-    return [
-        Finding(k.where(), f"the failure {k.name} is named in transport vocabulary")
-        for k in failures(p)
-        if any(t in k.name for t in TRANSPORT)
-    ]
+def err_005(p: Project) -> Checked:
+    selected = failures(p)
+    return Checked(
+        len(selected),
+        [
+            Finding(k.where(), f"the failure {k.name} is named in transport vocabulary")
+            for k in selected
+            if any(t in k.name for t in TRANSPORT)
+        ],
+    )
 
 
 def alias_members(p: Project, module: Module, node: ast.expr | None) -> list[Klass]:
@@ -130,15 +147,19 @@ def closed_results(p: Project) -> dict[str, tuple[Klass, list[Klass]]]:
 
 
 @rule("DCA-ERR-006")
-def err_006(p: Project) -> list[Finding]:
+def err_006(p: Project) -> Checked:
+    """Selects the incoming adapters that drive an input port - where the project has a failure or a refusal to
+    translate at all."""
     cases = {c.qualname for _, (_, cs) in closed_results(p).items() for c in cs}
     if not failures(p) and not cases:
-        return []
+        return Checked(0, [])
     found = []
+    selected = 0
     for module in p.in_layer("incoming"):
         named = list(named_classes(p, module))
         if not any(p.has(k, "InputPort") for _, k in named):
             continue
+        selected += 1
         translates = any(p.roles(k) & {"DomainException", "UseCaseException"} or k.qualname in cases for _, k in named)
         if not translates:
             found.append(
@@ -155,13 +176,14 @@ def err_006(p: Project) -> list[Finding]:
                         f"{module.dotted} handles {name.rsplit('.', 1)[-1]} as such: every outcome the same way",
                     )
                 )
-    return found
+    return Checked(selected, found)
 
 
 @rule("DCA-ERR-007")
-def err_007(p: Project) -> list[Finding]:
+def err_007(p: Project) -> Checked:
     found = []
-    for failure in failures(p):
+    selected = failures(p)
+    for failure in selected:
         for field in failure.fields:
             names = p.type_names(failure.module, field.annotation)
             held = [n.rsplit(".", 1)[-1] for n in names if n == "builtins.str"] + [
@@ -174,22 +196,28 @@ def err_007(p: Project) -> list[Finding]:
                         f"{failure.name}.{field.name} carries {', '.join(held)}; carry ids and figures",
                     )
                 )
-    return found
+    return Checked(len(selected), found)
 
 
 @rule("DCA-ERR-008")
-def err_008(p: Project) -> list[Finding]:
-    return [
-        Finding(
-            port.where(), f"the closed result of {name} ({', '.join(c.name for c in cases)}) has no case marked Refusal"
-        )
-        for name, (port, cases) in sorted(closed_results(p).items())
-        if not any(p.has(c, "Refusal") for c in cases)
-    ]
+def err_008(p: Project) -> Checked:
+    selected = sorted(closed_results(p).items())
+    return Checked(
+        len(selected),
+        [
+            Finding(
+                port.where(),
+                f"the closed result of {name} ({', '.join(c.name for c in cases)}) has no case marked Refusal",
+            )
+            for name, (port, cases) in selected
+            if not any(p.has(c, "Refusal") for c in cases)
+        ],
+    )
 
 
 @rule("DCA-ERR-009")
-def err_009(p: Project) -> list[Finding]:
+def err_009(p: Project) -> Checked:
+    """Selects the domain exceptions, and checks every place that builds one."""
     found = []
     for module in p.modules.values():
         if module.place.layer == "domain":
@@ -202,4 +230,4 @@ def err_009(p: Project) -> list[Finding]:
                         f"{module.dotted} constructs the domain exception {klass.name}; only the domain does",
                     )
                 )
-    return found
+    return Checked(len(p.with_role("DomainException")), found)

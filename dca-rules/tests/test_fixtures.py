@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 import pytest
-from dca_rules import Finding, catalogue, implemented, run
+from dca_rules import Finding, catalogue, implemented, report, run
 from dca_rules.layout import DcaLayout
 from dca_rules.model import Project
 
@@ -32,7 +32,7 @@ def fixture(name: str) -> Project:
 
 def findings(project: Project, rule_id: str) -> tuple[Finding, ...]:
     outcome = run(project, rule_id)
-    assert outcome.kind == "ran", f"{rule_id} did not run: {outcome.kind}"
+    assert outcome.kind in ("ran", "empty"), f"{rule_id} did not run: {outcome.kind}"
     return outcome.findings
 
 
@@ -89,6 +89,70 @@ def test_the_reconstituting_factory_follows_the_configured_names() -> None:
     assert [f.message for f in findings(renamed, "DCA-TAC-025")] == ["Thing.reconstitute(archived) takes bool"]
 
 
+def test_a_rule_finds_something_only_among_what_it_selected() -> None:
+    projects = {name: fixture(name) for name in ("violations", "undeclared", "own-markers")}
+    found_over_nothing = [
+        f"{name}: {rule_id}"
+        for name, project in projects.items()
+        for rule_id in implemented()
+        if (outcome := run(project, rule_id)).findings and outcome.selected == 0
+    ]
+    assert not found_over_nothing
+
+
+def test_the_conforming_fixture_names_exactly_what_it_lacks() -> None:
+    project = fixture("conforming")
+    empty = {r for r in implemented() if run(project, r).kind == "empty"}
+    allowed = {r for r, _ in project.layout.allow_empty}
+    assert empty == allowed, (
+        f"select nothing: {sorted(empty - allowed)}; allowed, select something: {sorted(allowed - empty)}"
+    )
+
+
+def test_a_rule_that_selects_nothing_is_its_own_outcome_and_fails() -> None:
+    source = DcaLayout.from_pyproject(FIXTURES / "conforming" / "pyproject.toml")
+    bare = Project(DcaLayout(project_root=source.project_root, base_package="fx", experimental="all"))
+    outcome = run(bare, "DCA-NAM-007")
+    assert (outcome.kind, outcome.selected, outcome.findings, outcome.allowed) == ("empty", 0, (), None)
+    assert outcome.fails
+    assert "nothing selected" in report("DCA-NAM-007", outcome)
+    assert run(bare, "DCA-TAC-003").selected > 0
+
+
+def test_allow_empty_with_a_reason_lets_a_rule_select_nothing() -> None:
+    outcome = run(fixture("conforming"), "DCA-NAM-007")
+    assert outcome.kind == "empty" and outcome.allowed and not outcome.fails
+    assert f"allowed: {outcome.allowed}" in report("DCA-NAM-007", outcome)
+
+
+def test_allow_empty_without_a_reason_is_refused(tmp_path: pathlib.Path) -> None:
+    with pytest.raises(ValueError, match="reason"):
+        DcaLayout(project_root=tmp_path, base_package="fx", allow_empty=(("DCA-NAM-007", " "),))
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.dca]\nbase-package = "fx"\nallow-empty = [{ rule = "DCA-NAM-007" }]\n'
+    )
+    with pytest.raises(ValueError, match="reason"):
+        DcaLayout.from_pyproject(tmp_path / "pyproject.toml")
+
+
+def test_a_rule_of_doctrine_alone_selects_nothing_by_design() -> None:
+    outcome = run(fixture("conforming"), "DCA-LAY-001")
+    assert outcome.kind == "ran" and outcome.selected == 0 and not outcome.fails
+
+
+def test_a_domain_gateway_is_implemented_by_name() -> None:
+    messages = [f.message for f in findings(fixture("violations"), "DCA-PY-003")]
+    assert "no class names the domain gateway Ratings among its bases" in messages
+    assert any(m.startswith("ShapeRatings fits the domain gateway Ratings by its shape") for m in messages)
+
+
+def test_an_open_host_service_of_functions_is_declared_by_its_module() -> None:
+    conforming = run(fixture("conforming"), "DCA-STR-005")
+    assert conforming.selected == 2 and not conforming.findings
+    found = findings(fixture("violations"), "DCA-STR-005")
+    assert any(f.location == "src/fx/alpha/domain/rating.py:5" for f in found), found
+
+
 @pytest.mark.parametrize(
     ("name", "role"),
     [
@@ -116,6 +180,7 @@ def test_the_reconstituting_factory_follows_the_configured_names() -> None:
         ("alpha.adapter.outgoing.memory.InMemoryThingRepository", "Repository"),
         ("alpha.adapter.outgoing.memory.ListPublisher", "DomainEventPublisher"),
         ("beta.api.BetaCatalog", "OpenHostService"),
+        ("alpha.domain.endorsement.Endorsements", "DomainGateway"),
         ("beta.api.events.BetaShipped", "IntegrationEvent"),
     ],
 )
@@ -197,6 +262,14 @@ def test_the_command_line_fails_with_one_line_per_finding() -> None:
         check=False,
     )
     assert done.returncode == 0, done.stdout
+    done = subprocess.run(
+        [sys.executable, "-m", "dca_rules", str(FIXTURES / "undeclared" / "pyproject.toml"), "DCA-NAM-007"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1
+    assert done.stdout.startswith("[DCA-NAM-007] ") and "nothing selected" in done.stdout
 
 
 def test_rules_json_knows_every_implemented_rule_and_marks_it() -> None:

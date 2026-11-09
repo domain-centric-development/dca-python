@@ -41,8 +41,13 @@ These hold for anyone working in any of the DCA repositories — human or agent 
   `dca-rules/fixtures/conforming` — `tests/test_fixtures.py` fails otherwise. Python-only rules take the next
   `DCA-PY-nnn` in `rules/python.py` and the mapping's `PYTHON_ONLY`, and start `experimental`.
 - **Roles are nominal.** A rule selects by the building blocks named among a class's bases, transitively, never by a
-  structural fit; `DCA-PY-003` holds the project to it. Fields are class-level annotations plus the `self.<name>`
+  structural fit; `DCA-PY-003` holds the project to it for every port the building blocks declare (output ports and
+  domain gateways). Fields are class-level annotations plus the `self.<name>`
   assignments of `__init__`, typed by their annotation or by the parameter assigned.
+- **A rule returns what it selected beside what it found** (`Checked(selected, findings)`): the selection is every
+  element of the concept the rule governs, by role, layer or name. An empty selection is the outcome `empty`
+  (`nothing selected`) and fails unless `[tool.dca] allow-empty` names the rule with a reason; a rule of doctrine
+  alone registers with `doctrine=True`. The conforming fixture's `allow-empty` names exactly what it lacks.
 - **Fixtures** are read, never imported or run; they name contexts `alpha` … `zeta` and types like `Thing` and `Part`
   — no vocabulary of a sample.
 - **The building blocks have no dependencies.** `EventId` and `Timestamp` are their own values so a domain field

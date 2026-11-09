@@ -415,7 +415,8 @@ MAPPING = {
     "DCA-STR-005": m(
         AT,
         [S],
-        "Classes that carry the OpenHostService role.",
+        "Classes that carry the OpenHostService role, and modules that declare one: an open host service of "
+        "functions marks its package with __dca__ = OpenHostService() in its __init__.py.",
         "Each sits in an api package or in an incoming adapter package.",
     ),
     "DCA-STR-006": m(
@@ -608,7 +609,7 @@ MAPPING = {
         "Every module outside an application package and the building blocks: its module-level statements, its "
         "functions and the methods of its classes, a class with the DomainService role excluded. A domain service is "
         "a class with the DomainService role, as DCA-ADV-010 selects it: roles are nominal on classes, so a module of "
-        "functions is no domain service by this rule.",
+        "functions is no domain service by this rule. A project without a class of that role selects nothing.",
         "No call constructs a class with the DomainService role, calls a function on it, or calls a method on a "
         "parameter or a local or module-level name annotated with it or assigned a construction of it, on a "
         "self.<attribute> typed with it or assigned one, or on one built in place. In an infrastructure package - the "
@@ -874,16 +875,17 @@ PYTHON_ONLY = [
     ),
     dict(
         id="DCA-PY-003",
-        title="An output port is implemented by name",
+        title="A port is implemented by name",
         rationale="A Protocol is structural: an adapter fits a port without naming it, and the rules - which read "
         "roles from bases - lose the implementation, and with it the placement rules. A port nobody names "
-        "is a port the rules cannot follow to its adapter.",
+        "is a port the rules cannot follow to its adapter. That holds for every port the building blocks "
+        "declare: an output port of the application and a domain gateway of the domain alike.",
         category=AT,
         enforcement=[S],
-        selects="Protocol classes that carry the OutputPort role, and the classes of "
+        selects="Protocol classes that carry the OutputPort or the DomainGateway role, and the classes of "
         "the outgoing adapters and the composition root.",
         checks="Every port is named among the bases of some class or of a narrower port; no class of the outgoing "
-        "adapters or the composition root that names no output port fits a port's methods, by name and parameter "
+        "adapters or the composition root that names no port fits a port's methods, by name and parameter "
         "names - nor the methods of a building block's port (Repository, DomainEventPublisher, TransactionBoundary). "
         "A class that names a port and fits another one by its shape is held to the port it names.",
     ),
