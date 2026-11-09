@@ -95,6 +95,14 @@ MAPPING = {
         "Informational - lists every module that sits in no layer (outside domain, application, adapter, "
         "infrastructure, api of a context, the shared kernel and the composition root), and never fails.",
     ),
+    "DCA-LAY-008": m(
+        AT,
+        [IMP],
+        "Modules in an application package. Planned: the suite does not implement it yet.",
+        "No import of a configured persistence or transaction library (sqlalchemy, sqlite3, psycopg, pymongo, "
+        "django.db by default). A decorator the framework preset names as transactional passes; a session, a "
+        "connection or a transaction opened in the use case does not.",
+    ),
     # --- onion -------------------------------------------------------------------------------------------------
     "DCA-ONI-001": m(AT, [IMP], "Every module in a domain package.", "It imports no module of an application package."),
     "DCA-ONI-002": m(
@@ -111,6 +119,13 @@ MAPPING = {
         "Classes in a domain package.",
         META_CHK,
         title="Domain models must not carry prohibited framework decorators, bases or field metadata",
+    ),
+    "DCA-ONI-004": m(
+        AT,
+        [S],
+        "Modules in a domain package. Planned: the suite does not implement it yet.",
+        "No async def, no await and no import of asyncio or concurrent.futures. The application and the adapters "
+        "are not selected.",
     ),
     # --- hexagonal ---------------------------------------------------------------------------------------------
     "DCA-HEX-001": m(AT, [IMP], "Every module in a domain package.", "It imports no module of an adapter package."),

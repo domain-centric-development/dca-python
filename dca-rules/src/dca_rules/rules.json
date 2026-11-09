@@ -149,6 +149,22 @@
       "implemented": true
     },
     {
+      "set": "layered",
+      "id": "DCA-LAY-008",
+      "title": "Application layer must not use persistence or transaction APIs",
+      "rationale": "A use case declares its transaction with the configured transactional annotation or draws its boundary through the transaction-boundary port or a decorator around the use case, never through a persistence context, a connection or a transaction scope of its own. A persistence or transaction API in the application layer binds the use cases to one persistence technology and hides where the boundary is; the boundary's implementation is the single place that knows how to open and commit a transaction",
+      "selects": "Modules in an application package. Planned: the suite does not implement it yet.",
+      "checks": "No import of a configured persistence or transaction library (sqlalchemy, sqlite3, psycopg, pymongo, django.db by default). A decorator the framework preset names as transactional passes; a session, a connection or a transaction opened in the use case does not.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "imports"
+      ],
+      "implemented": false
+    },
+    {
       "set": "onion",
       "id": "DCA-ONI-001",
       "title": "Domain must not access Application Services (Onion Architecture - Domain is innermost layer)",
@@ -196,6 +212,22 @@
         "source"
       ],
       "implemented": true
+    },
+    {
+      "set": "onion",
+      "id": "DCA-ONI-004",
+      "title": "Domain layer must stay synchronous",
+      "rationale": "Asynchrony is an I/O concern of ports and adapters; a synchronous domain model stays testable, deterministic and free of sync-over-async hazards",
+      "selects": "Modules in a domain package. Planned: the suite does not implement it yet.",
+      "checks": "No async def, no await and no import of asyncio or concurrent.futures. The application and the adapters are not selected.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": false
     },
     {
       "set": "hexagonal",
