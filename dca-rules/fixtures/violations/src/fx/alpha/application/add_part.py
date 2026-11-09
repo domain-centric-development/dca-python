@@ -65,6 +65,10 @@ class TakeInputPort(UseCase[AddPartCommand, TakeResult], typing.Protocol):
     pass
 
 
+class CountPartsInputPort(UseCase[LookQuery, int], typing.Protocol):  # DCA-USE-022: a bare number answers
+    pass
+
+
 class OnPartAddedInputPort(UseCase[AddPartCommand, AddPartResult], typing.Protocol):  # DCA-NAM-012
     pass
 
@@ -108,5 +112,6 @@ class LookUseCase(LookInputPort):
         self._things = things
 
     def execute(self, command: LookQuery, /) -> LookResult:
+        self._last = command  # DCA-USE-021: the use case keeps the last query
         self._things.save(None)  # DCA-USE-019
         return NothingFound()

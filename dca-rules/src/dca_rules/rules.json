@@ -502,6 +502,22 @@
       "implemented": true
     },
     {
+      "set": "hexagonal",
+      "id": "DCA-HEX-021",
+      "title": "Outgoing adapters must not call state-changing methods of aggregate roots",
+      "rationale": "An aggregate's state changes through its own methods, each with its guard and its event, and the application decides when one runs. An outgoing adapter that calls one changes the aggregate on a path no use case owns, outside the transaction the use case draws and without the events it publishes. The adapter stores and loads what the aggregate holds",
+      "selects": "The module-level functions and the methods of the classes in an outgoing adapter package. A project without a class carrying the AggregateRoot role selects nothing.",
+      "checks": "No call on a name that holds an aggregate root targets a method that changes it. A name holds a root when it is a parameter or a local annotated with a class of the AggregateRoot role, is assigned a construction of one, a call of its class or static method, or a call of a method or function whose return annotation names one, is the loop variable over such a name, or is self.<attribute> typed with one. A method changes the root when it is a public instance method, neither property nor class or static method, of the root or a project class it extends, that is annotated -> None or assigns to self; a method the building blocks declare (clearing the recorded events after publishing) passes. Python has no static types: a name bound in another way is not followed. A change written to storage directly, past the aggregate, is not seen.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
       "set": "tactical",
       "id": "DCA-TAC-001",
       "title": "Aggregate Roots must implement AggregateRoot<T, ID>",
@@ -878,8 +894,8 @@
       "id": "DCA-TAC-025",
       "title": "Domain types must not hold bare primitives, strings or time types; a boolean only as a field or a predicate",
       "rationale": "A value with rules of its own - a postal code, a quantity, a moment, an identifier - is a value object; held as a bare String, int, Instant or UUID its validation is repeated at every use or missing. A value object with several components holds value objects too; only a wrapper - a value of exactly one component - holds the primitive it wraps. A single yes/no fact may stay a boolean field: the type is told (complete()) and answers (isCompleted()). A boolean parameter is a flag argument - setCompleted(true) lets the caller set the state instead of triggering the behaviour - except in the factory that rebuilds a stored object, which hands the stored fact back to the type that holds it. Three or more states, or transitions with rules, are an enum or a value",
-      "selects": "Classes in a domain package, the shared kernel's included. Not selected: a value or id whose one field is value, exceptions, enums.",
-      "checks": "No field, parameter of a public method or return annotation names str, int, float, bytes, complex, a datetime type, timedelta or uuid.UUID. A private bool field - a single yes/no fact - and a bool return - a predicate - pass; a bool parameter and a public bool field do not. A bool parameter of the factory that rebuilds a stored object - a class or static method annotated to return the class or Self, named as [tool.dca] reconstituting-factories lists, reconstitute and restore by default, case ignored - passes; its other parameters are checked.",
+      "selects": "Classes in a domain package, the shared kernel's included. Not selected: a value or id whose one field is value, exceptions; an enum only for its members.",
+      "checks": "No field, parameter of a public method or return annotation names str, int, float, bytes, complex, a datetime type, timedelta or uuid.UUID. A private bool field - a single yes/no fact - and a bool return - a predicate - pass; a bool parameter and a public bool field do not. A bool parameter of the factory that rebuilds a stored object - a class or static method annotated to return the class or Self, named as [tool.dca] reconstituting-factories lists, reconstitute and restore by default, case ignored - passes; its other parameters are checked. An enum class with exactly two members that name one fact and its negation - yes/no, true/false, on/off, present/absent, enabled/disabled, or X beside NOT_X, NO_X, NON_X or UN_X, case and underscores ignored - is reported where it is declared: a boolean in disguise. Two members with names of their own pass.",
       "implementation": "python",
       "status": "enforced",
       "maturity": "experimental",
@@ -1899,6 +1915,38 @@
       "enforcement": [
         "source",
         "ruff"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-021",
+      "title": "Use cases should be stateless (only final fields for dependencies)",
+      "rationale": "One instance of a use case serves every caller. A field it writes while it runs is shared by the next call and by concurrent ones, and one call's outcome depends on the call before. What a use case holds is set once, by its constructor: the ports and services it is wired with",
+      "selects": "Use cases: classes, protocols excluded, that carry the InputPort role.",
+      "checks": "No method other than __init__ assigns to self. Python has no final field; statelessness is the absence of mutation.",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "reformulated",
+      "enforcement": [
+        "source"
+      ],
+      "implemented": true
+    },
+    {
+      "set": "usecase",
+      "id": "DCA-USE-022",
+      "title": "Use case results must not be bare primitives or strings",
+      "rationale": "A use case answers in the application's language: a result type of its own, a value, or a case of a closed result. A bare number, text or flag carries no meaning of its own - an exit code, a status word or a count whose meaning lives in the caller - and it cannot gain a case without changing every caller",
+      "selects": "Classes and protocols with the InputPort role that name UseCase[I, O] among their bases.",
+      "checks": "O, or a member of a union or Optional it names, is none of int, str, bool, float, bytes. None passes - a command with nothing to answer -, and so does a container such as list[str].",
+      "implementation": "python",
+      "status": "enforced",
+      "maturity": "experimental",
+      "category": "ast-test",
+      "enforcement": [
+        "source"
       ],
       "implemented": true
     },

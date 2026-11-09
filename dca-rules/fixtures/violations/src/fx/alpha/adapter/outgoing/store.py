@@ -1,6 +1,6 @@
 from fx.alpha.application.add_part import AddPartInputPort  # DCA-HEX-013
 from fx.alpha.application.shared import ThingRepository
-from fx.alpha.domain.model import Label, Pricing
+from fx.alpha.domain.model import Label, Pricing, Thing
 from fx.beta.adapter.outgoing import things as beta_store  # DCA-CYC-003
 from fx.beta.infrastructure import WIRED  # DCA-HEX-005, DCA-STR-006
 from fx.zeta.api import ZetaApi  # DCA-MAP-011: no upstream declared
@@ -27,3 +27,8 @@ def export(pricing: Pricing, label: Label) -> Label:
 class ShapeRatings:  # DCA-PY-003: fits the domain gateway Ratings by its shape, names it nowhere
     def rating_of(self, key: str) -> bool:
         return bool(key)
+
+
+def relabel(thing: Thing, label: Label) -> Thing:
+    thing.set_label(label)  # DCA-HEX-021: an outgoing adapter changes the aggregate
+    return thing

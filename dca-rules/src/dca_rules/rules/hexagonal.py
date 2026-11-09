@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Callable, Iterator
 
-from dca_rules.model import Klass, Module, Project, dotted_name
+from dca_rules.model import Klass, Module, Project, dotted_name, parameters
 from dca_rules.rules import Checked, Finding, rule
 
 
@@ -114,6 +114,171 @@ def hex_013(p: Project) -> Checked:
         "an outgoing adapter is driven, it drives nothing",
         lambda k: p.has(k, "InputPort"),
     )
+
+
+def _decorated(method: ast.FunctionDef | ast.AsyncFunctionDef, *names: str) -> bool:
+    return any(dotted_name(d.func if isinstance(d, ast.Call) else d) in names for d in method.decorator_list)
+
+
+def _changes_self(method: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    for node in ast.walk(method):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        for target in targets:
+            while isinstance(target, (ast.Attribute, ast.Subscript)):
+                if isinstance(target.value, ast.Name) and target.value.id == "self":
+                    return True
+                target = target.value
+    return False
+
+
+def commands_of(p: Project, root: Klass) -> set[str]:
+    """The methods of an aggregate root, its own and inherited from project classes, that change its state: a public
+    instance method that assigns to `self` or is declared to return `None`. Properties, class and static methods are
+    queries or constructors."""
+    owners = [root] + [p.classes[a] for a in p.ancestors(root) if a in p.classes]
+    out: set[str] = set()
+    for owner in owners:
+        for name, method in owner.methods.items():
+            if name.startswith("_") or _decorated(method, "property", "classmethod", "staticmethod"):
+                continue
+            returns_none = isinstance(method.returns, ast.Constant) and method.returns.value is None
+            if returns_none or _changes_self(method):
+                out.add(name)
+    return out
+
+
+class _RootHolders:
+    """The names in one scope of an outgoing adapter that hold an aggregate root: parameters and locals annotated with
+    one, a construction or a factory call of one, a call declared to return one, the loop variable over a name that
+    holds roots, and `self.<attr>` typed with one."""
+
+    def __init__(self, p: Project, module: Module, attributes: dict[str, Klass], held: dict[str, Klass]) -> None:
+        self.p = p
+        self.module = module
+        self.attributes = attributes
+        self.held = held
+        self.names: dict[str, Klass] = {}
+
+    def root(self, annotation: ast.expr | None, module: Module | None = None) -> Klass | None:
+        for klass in self.p.type_classes(module or self.module, annotation):
+            if self.p.has(klass, "AggregateRoot"):
+                return klass
+        return None
+
+    def returned(self, node: ast.expr | None) -> Klass | None:
+        """The aggregate root a call returns by its declaration: a method of a class named or held in
+        `self.<attr>`, or a function of the project."""
+        if isinstance(node, ast.Await):
+            node = node.value
+        if not isinstance(node, ast.Call):
+            return None
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            owner = self.p.klass(self.module, func.value)
+            if owner is None and isinstance(func.value, ast.Attribute) and isinstance(func.value.value, ast.Name):
+                owner = self.held.get(func.value.attr) if func.value.value.id == "self" else None
+            if owner is not None:
+                for klass in [owner] + [self.p.classes[a] for a in self.p.ancestors(owner) if a in self.p.classes]:
+                    method = klass.methods.get(func.attr)
+                    if method is not None:
+                        return self.root(method.returns, klass.module)
+        name = self.p.resolve(self.module, func)
+        if name:
+            where, _, function = name.rpartition(".")
+            module = self.p.modules.get(where)
+            defined = module.defined.get(function) if module is not None else None
+            if isinstance(defined, (ast.FunctionDef, ast.AsyncFunctionDef)) and module is not None:
+                return self.root(defined.returns, module)
+        return None
+
+    def built(self, node: ast.expr | None) -> Klass | None:
+        if not isinstance(node, ast.Call):
+            return None
+        klass = self.p.klass(self.module, node.func)
+        if klass is None and isinstance(node.func, ast.Attribute):
+            klass = self.p.klass(self.module, node.func.value)
+            method = klass.methods.get(node.func.attr) if klass is not None else None
+            if method is None or not _decorated(method, "classmethod", "staticmethod"):
+                klass = None
+        return klass if klass is not None and self.p.has(klass, "AggregateRoot") else None
+
+    def holder(self, node: ast.expr) -> Klass | None:
+        if isinstance(node, ast.Name):
+            return self.names.get(node.id)
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "self":
+            return self.attributes.get(node.attr)
+        return None
+
+    def bind(self, node: ast.AST) -> None:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            klass = self.root(node.annotation) or self.built(node.value) or self.returned(node.value)
+            if klass is not None:
+                self.names[node.target.id] = klass
+        elif isinstance(node, ast.Assign):
+            klass = self.built(node.value) or self.returned(node.value)
+            if klass is not None:
+                self.names.update((t.id, klass) for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(node.target, ast.Name):
+            klass = self.holder(node.iter) if isinstance(node.iter, (ast.Name, ast.Attribute)) else None
+            if klass is not None:
+                self.names[node.target.id] = klass
+
+    def calls(self, function: ast.FunctionDef | ast.AsyncFunctionDef) -> Iterator[tuple[ast.Call, Klass, str]]:
+        for argument in parameters(function):
+            klass = self.root(argument.annotation)
+            if klass is not None:
+                self.names[argument.arg] = klass
+        for node in ast.walk(function):
+            self.bind(node)
+        for node in ast.walk(function):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                klass = self.holder(node.func.value)
+                if klass is not None:
+                    yield node, klass, node.func.attr
+
+
+@rule("DCA-HEX-021")
+def hex_021(p: Project) -> Checked:
+    """Selects every function and method of the outgoing adapters, where the project has an aggregate root."""
+    if not p.with_role("AggregateRoot"):
+        return Checked(0, [])
+    found = []
+    selected = 0
+    commands: dict[str, set[str]] = {}
+    for module in p.in_layer("outgoing"):
+        scopes: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, dict[str, Klass], dict[str, Klass]]] = []
+        for statement in module.tree.body:
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                scopes.append((statement, {}, {}))
+        for klass in p.classes.values():
+            if klass.module is not module:
+                continue
+            attributes: dict[str, Klass] = {}
+            held: dict[str, Klass] = {}
+            for field in klass.fields:
+                for typed in p.type_classes(module, field.annotation):
+                    held.setdefault(field.name, typed)
+                    if p.has(typed, "AggregateRoot"):
+                        attributes[field.name] = typed
+            scopes += [(method, attributes, held) for method in klass.methods.values()]
+        selected += len(scopes)
+        for function, attributes, held in scopes:
+            for call, root, name in _RootHolders(p, module, attributes, held).calls(function):
+                if root.qualname not in commands:
+                    commands[root.qualname] = commands_of(p, root)
+                if name in commands[root.qualname]:
+                    found.append(
+                        Finding(
+                            module.where(call),
+                            f"{function.name} calls {root.name}.{name}, which changes the aggregate; an outgoing "
+                            "adapter stores and loads what the aggregate holds, the application changes it",
+                        )
+                    )
+    return Checked(selected, found)
 
 
 def handlers(p: Project) -> Iterator[tuple[Module, ast.FunctionDef | ast.AsyncFunctionDef, str, ast.Call]]:

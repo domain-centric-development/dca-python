@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import enum
+
 from dca_building_blocks import (
     AggregateRoot,
     DomainEvent,
@@ -18,6 +20,13 @@ LIMIT = 3
 
 class ThingId(Id):
     value: str
+
+
+class Side(enum.Enum):
+    """Two cases with names of their own: no boolean in disguise (DCA-TAC-025)."""
+
+    LEFT = "left"
+    RIGHT = "right"
 
 
 class PartId(Id):

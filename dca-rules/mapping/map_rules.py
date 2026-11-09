@@ -176,6 +176,21 @@ MAPPING = {
         "Modules in an outgoing adapter package.",
         "None names a class or protocol that carries the InputPort role.",
     ),
+    "DCA-HEX-021": m(
+        RF,
+        [S],
+        "The module-level functions and the methods of the classes in an outgoing adapter package. A project "
+        "without a class carrying the AggregateRoot role selects nothing.",
+        "No call on a name that holds an aggregate root targets a method that changes it. A name holds a root "
+        "when it is a parameter or a local annotated with a class of the AggregateRoot role, is assigned a "
+        "construction of one, a call of its class or static method, or a call of a method or function whose "
+        "return annotation names one, is the loop variable over such a name, or is self.<attribute> typed with "
+        "one. A method changes the root when it is a public instance method, neither property nor class or "
+        "static method, of the root or a project class it extends, that is annotated -> None or assigns to "
+        "self; a method the building blocks declare (clearing the recorded events after publishing) passes. "
+        "Python has no static types: a name bound in another way is not followed. A change written to "
+        "storage directly, past the aggregate, is not seen.",
+    ),
     "DCA-HEX-014": m(
         RF,
         [S],
@@ -371,13 +386,16 @@ MAPPING = {
         AT,
         [S],
         "Classes in a domain package, the shared kernel's included. Not selected: a value or "
-        "id whose one field is value, exceptions, enums.",
+        "id whose one field is value, exceptions; an enum only for its members.",
         "No field, parameter of a public method or return annotation names str, int, float, bytes, "
         "complex, a datetime type, timedelta or uuid.UUID. A private bool field - a single yes/no fact - "
         "and a bool return - a predicate - pass; a bool parameter and a public bool field do not. A bool "
         "parameter of the factory that rebuilds a stored object - a class or static method annotated to "
         "return the class or Self, named as [tool.dca] reconstituting-factories lists, reconstitute and "
-        "restore by default, case ignored - passes; its other parameters are checked.",
+        "restore by default, case ignored - passes; its other parameters are checked. An enum class with "
+        "exactly two members that name one fact and its negation - yes/no, true/false, on/off, present/absent, "
+        "enabled/disabled, or X beside NOT_X, NO_X, NON_X or UN_X, case and underscores ignored - is reported "
+        "where it is declared: a boolean in disguise. Two members with names of their own pass.",
     ),
     "DCA-TAC-026": m(
         AT,
@@ -710,6 +728,20 @@ MAPPING = {
         "Use cases.",
         "No call of uuid.UUID(...). Parsing happens in the adapter or in the "
         "id's own constructor; a per-directory ruff.toml (banned-api uuid.UUID) holds it while editing.",
+    ),
+    "DCA-USE-021": m(
+        RF,
+        [S],
+        "Use cases: classes, protocols excluded, that carry the InputPort role.",
+        "No method other than __init__ assigns to self. Python has no final field; statelessness is the "
+        "absence of mutation.",
+    ),
+    "DCA-USE-022": m(
+        AT,
+        [S],
+        "Classes and protocols with the InputPort role that name UseCase[I, O] among their bases.",
+        "O, or a member of a union or Optional it names, is none of int, str, bool, float, bytes. None passes - a "
+        "command with nothing to answer -, and so does a container such as list[str].",
     ),
     # --- naming ------------------------------------------------------------------------------------------------
     "DCA-NAM-001": m(AT, [S], "Use cases in an application package.", "The name ends with UseCase."),

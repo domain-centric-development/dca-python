@@ -59,6 +59,11 @@ class Status(enum.Enum):
     OPEN = "open"
 
 
+class Presence(enum.Enum):  # DCA-TAC-025: one fact and its negation, a boolean in disguise
+    PRESENT = "present"
+    ABSENT = "absent"
+
+
 class OrderAggregateRoot:  # DCA-TAC-001
     pass
 

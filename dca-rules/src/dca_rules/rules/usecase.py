@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from dca_rules.model import Klass, Project, parameters, public
+from dca_rules.model import BB, Klass, Project, dotted_name, parameters, public
 from dca_rules.rules import Checked, Finding, rule
 from dca_rules.rules.hexagonal import is_use_case
 
@@ -328,6 +328,71 @@ def use_020(p: Project) -> Checked:
                     Finding(
                         use_case.module.where(node),
                         f"{use_case.name} parses raw input into a UUID; the adapter or the id's own constructor does",
+                    )
+                )
+    return Checked(len(selected), found)
+
+
+@rule("DCA-USE-021")
+def use_021(p: Project) -> Checked:
+    """Selects the use cases; a method other than `__init__` that assigns to `self` keeps state between calls."""
+    selected = use_cases(p)
+    return Checked(
+        len(selected),
+        [
+            Finding(k.module.where(node), f"the use case {k.name} keeps state: {name} assigns to self")
+            for k in selected
+            for name, node in p.mutators(k)
+        ],
+    )
+
+
+PRIMITIVES = {"builtins.int", "builtins.str", "builtins.bool", "builtins.float", "builtins.bytes"}
+
+
+def _result_annotation(p: Project, port: Klass) -> ast.expr | None:
+    """`O` of the `UseCase[I, O]` an input port names among its bases."""
+    for base in port.node.bases:
+        if isinstance(base, ast.Subscript) and p.resolve(port.module, base.value) == f"{BB}.UseCase":
+            arguments = base.slice.elts if isinstance(base.slice, ast.Tuple) else [base.slice]
+            return arguments[1] if len(arguments) > 1 else None
+    return None
+
+
+def _cases(node: ast.expr) -> list[ast.expr]:
+    """The cases of a result annotation: the members of `A | B`, of `Optional[A]` and `Union[A, B]`, else itself.
+    What a container holds (`list[str]`) is the container's business, not a case."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _cases(node.left) + _cases(node.right)
+    if isinstance(node, ast.Subscript) and dotted_name(node.value) in (
+        "Optional",
+        "Union",
+        "typing.Optional",
+        "typing.Union",
+    ):
+        inner = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
+        return [case for item in inner for case in _cases(item)]
+    return [node]
+
+
+@rule("DCA-USE-022")
+def use_022(p: Project) -> Checked:
+    """Selects the input ports that name `UseCase[I, O]`; `O`, or a case of it, is no bare int, str, bool, float or
+    bytes."""
+    found = []
+    selected = []
+    for port in p.classes.values():
+        result = _result_annotation(p, port) if p.has(port, "InputPort") else None
+        if result is None:
+            continue
+        selected.append(port)
+        for node in _cases(result):
+            if isinstance(node, (ast.Name, ast.Attribute)) and p.resolve(port.module, node) in PRIMITIVES:
+                found.append(
+                    Finding(
+                        port.where(),
+                        f"{port.name} returns {ast.unparse(node)}; a use case's result is a type of its own, a "
+                        "value or a case of a closed result",
                     )
                 )
     return Checked(len(selected), found)

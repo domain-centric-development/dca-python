@@ -25,6 +25,10 @@ class InMemoryThingRepository(ThingRepository):
     def delete_by_id(self, aggregate_id: ThingId, /) -> None:
         self._things.pop(aggregate_id, None)
 
+    def full_ones(self) -> list[ThingId]:
+        # Asking the aggregate is a query: an outgoing adapter may read what it holds.
+        return [thing.id for thing in self._things.values() if thing.is_full()]
+
 
 class ListJournal(ThingJournal):
     def __init__(self) -> None:

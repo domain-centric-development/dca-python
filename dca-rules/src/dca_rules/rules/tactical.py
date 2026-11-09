@@ -459,12 +459,50 @@ def _rebuilds(p: Project, klass: Klass, name: str, method: ast.FunctionDef | ast
     return builds_class(klass, method) and name.lower() in {n.lower() for n in p.layout.reconstituting_factories}
 
 
+OPPOSITES = {
+    frozenset(pair)
+    for pair in (("yes", "no"), ("true", "false"), ("on", "off"), ("present", "absent"), ("enabled", "disabled"))
+}
+
+
+def _members(klass: Klass) -> list[str]:
+    """The names an enum class assigns in its body, private ones left out."""
+    names = []
+    for statement in klass.node.body:
+        targets = statement.targets if isinstance(statement, ast.Assign) else []
+        if isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            targets = [statement.target]
+        names += [t.id for t in targets if isinstance(t, ast.Name) and not t.id.startswith("_")]
+    return names
+
+
+def yes_no(names: list[str]) -> bool:
+    """Two names that are one fact and its negation: a known pair, or X beside NOT_X, NO_X, NON_X or UN_X."""
+    if len(names) != 2:
+        return False
+    a, b = (n.lower().replace("_", "") for n in names)
+    if frozenset((a, b)) in OPPOSITES:
+        return True
+    return any(
+        longer == prefix + shorter for shorter, longer in ((a, b), (b, a)) for prefix in ("not", "no", "non", "un")
+    )
+
+
 @rule("DCA-TAC-025")
 def tac_025(p: Project) -> Checked:
     found = []
     selected = p.classes_in("domain")
     for klass in selected:
         ancestors = p.ancestors(klass)
+        if any(a.startswith("enum.") for a in ancestors) and yes_no(_members(klass)):
+            found.append(
+                Finding(
+                    klass.where(),
+                    f"{klass.name} names one fact and its negation ({', '.join(_members(klass))}); a boolean in "
+                    "disguise - a bool field, two methods, or cases with names of their own",
+                )
+            )
+            continue
         if (
             _wrapper(p, klass)
             or "builtins.Exception" in ancestors
