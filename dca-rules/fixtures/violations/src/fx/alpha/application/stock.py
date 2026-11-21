@@ -105,6 +105,27 @@ class StockCaller:
         except Exception:  # DCA-ERR-010: an alias of the port field
             pass
 
+    def call_and_undo(self, command: StockCommand) -> None:
+        try:
+            self._port.execute(command)
+        except BaseException:  # cleans up and hands the failure on unchanged: no finding
+            self.undone = True
+            raise
+
+    def call_and_wrap(self, command: StockCommand) -> None:
+        try:
+            self._port.execute(command)
+        except Exception as failure:  # DCA-ERR-010: handed on wrapped, not unchanged
+            raise RuntimeError("stock") from failure
+
+    def call_or_return(self, command: StockCommand) -> None:
+        try:
+            self._port.execute(command)
+        except Exception:  # DCA-ERR-010: a return leaves the handler another way
+            if self.undone:
+                return
+            raise
+
 
 class ShelveInputPort(UseCase[StockCommand, StockResult], abc.ABC):
     """An abstract base class with abstract methods only: an input port, no use case (DCA-NAM-001 stays silent)."""

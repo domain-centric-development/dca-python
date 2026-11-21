@@ -331,10 +331,31 @@ def _catches_all(p: Project, module: Module, handler: ast.ExceptHandler) -> str 
     return None
 
 
+def _passes_on(handler: ast.ExceptHandler) -> bool:
+    """The handler hands the caught failure on unchanged: it ends in a bare `raise` or `raise <the caught name>`
+    without a cause, and no `return`, `break` or `continue` of its own leaves it another way - it may clean up first."""
+    if not handler.body:
+        return False
+    last = handler.body[-1]
+    if not isinstance(last, ast.Raise) or last.cause is not None:
+        return False
+    if last.exc is not None and not (isinstance(last.exc, ast.Name) and last.exc.id == handler.name):
+        return False
+
+    def exits(node: ast.AST) -> bool:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            return False
+        if isinstance(node, (ast.Return, ast.Break, ast.Continue)):
+            return True
+        return any(exits(child) for child in ast.iter_child_nodes(node))
+
+    return not any(exits(statement) for statement in handler.body)
+
+
 @rule("DCA-ERR-010")
 def err_010(p: Project) -> Checked:
     """Selects every try statement in the application and the incoming adapters whose try part calls a method on an
-    input or output port."""
+    input or output port. A catch-all handler that hands the failure on unchanged, after cleaning up, passes."""
     selected = 0
     found = []
     for module in p.in_layer("application", "incoming"):
@@ -351,7 +372,7 @@ def err_010(p: Project) -> Checked:
                 target = ast.unparse(call.func)
                 for handler in node.handlers:
                     caught = _catches_all(p, module, handler)
-                    if caught is not None:
+                    if caught is not None and not _passes_on(handler):
                         found.append(
                             Finding(
                                 module.where(handler),

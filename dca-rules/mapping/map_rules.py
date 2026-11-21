@@ -1071,8 +1071,9 @@ MAPPING = {
         "port failures' common base - PortException, InputPortException or a class of the project that carries "
         "them without UseCaseException or OutputPortException; a subclass of UseCaseException or "
         "OutputPortException, UseCaseException and OutputPortException themselves and a named domain failure "
-        "pass. A clause that cleans up and re-raises the caught failure unchanged is reported as well, as in "
-        "Java: the clean-up belongs in a finally block, the except names the failure. A try part that reaches a "
+        "pass. A clause that hands the caught failure on unchanged passes - it may clean up first: it ends in a "
+        "bare raise or raise <the caught name> without a cause, and no return, break or continue of its own "
+        "leaves it another way; a raise ... from it wraps the failure and is reported. A try part that reaches a "
         "port through a helper of its own, through a value whose type is not written out or through a field of a "
         "parameter is not selected; a catch outside these layers passes.",
     ),
