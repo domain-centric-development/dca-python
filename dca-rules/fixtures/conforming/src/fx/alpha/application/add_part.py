@@ -6,7 +6,7 @@ from typing import Protocol
 
 from dca_building_blocks import DomainEventPublisher, EventId, Refusal, Timestamp, TransactionBoundary, UseCase
 from fx.alpha.application.shared import ThingRepository
-from fx.alpha.domain.thing import Label, PartId, ThingId
+from fx.alpha.domain.thing import Label, PartId, Thing, ThingId
 from fx.sharedkernel.domain.owner import OwnerId
 
 
@@ -49,8 +49,14 @@ class AddPartUseCase(AddPartInputPort):
             if thing is None:
                 return ThingMissing(command.thing_id)
             thing.add_part(command.part_id, command.label, EventId(uuid.uuid4()), command.now)
-            self._things.save(thing)
-            self._events.publish_and_clear_events(thing)
+            self._keep(thing)
             return PartAccepted(command.part_id)
 
         return self._transactions.in_transaction_closed(work)
+
+    def _keep(self, thing: Thing) -> None:
+        """Runs inside the work alone, so its writes sit inside the boundary (DCA-USE-012); the alias holds the
+        repository all the same (DCA-USE-009)."""
+        things = self._things
+        things.save(thing)
+        self._events.publish_and_clear_events(thing)

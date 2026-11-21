@@ -181,7 +181,7 @@ def test_an_open_host_service_of_functions_is_declared_by_its_module() -> None:
         ("alpha.adapter.outgoing.memory.ListPublisher", "DomainEventPublisher"),
         ("beta.api.BetaCatalog", "OpenHostService"),
         ("alpha.domain.endorsement.Endorsements", "DomainGateway"),
-        ("beta.api.events.BetaShipped", "IntegrationEvent"),
+        ("beta.events.BetaShipped", "IntegrationEvent"),
     ],
 )
 def test_the_conforming_fixture_carries_the_roles_its_rules_select_by(name: str, role: str) -> None:
@@ -201,7 +201,7 @@ def test_the_conforming_fixture_places_its_modules() -> None:
             "alpha.adapter.incoming.web.things",
             "alpha.adapter.incoming.event.beta_shipped",
             "alpha.adapter.outgoing.memory",
-            "beta.api.events",
+            "beta.events",
             "sharedkernel.domain.owner",
             "infrastructure",
         )
@@ -212,7 +212,7 @@ def test_the_conforming_fixture_places_its_modules() -> None:
     assert places["alpha.adapter.incoming.web.things"].sub == "web"
     assert places["alpha.adapter.incoming.event.beta_shipped"].sub == "event"
     assert places["alpha.adapter.outgoing.memory"].layer == "outgoing"
-    assert (places["beta.api.events"].layer, places["beta.api.events"].sub) == ("api", "events")
+    assert places["beta.events"].layer == "events"
     assert places["sharedkernel.domain.owner"].kernel
     assert places["infrastructure"].layer == "root"
     assert project.declared_contexts() == {"alpha": "alpha", "beta": "beta"}
@@ -254,7 +254,7 @@ def test_the_command_line_fails_with_one_line_per_finding() -> None:
         check=False,
     )
     assert done.returncode == 1
-    assert done.stdout.splitlines()[1].startswith("[DCA-TAC-003] src/fx/alpha/domain/model.py:")
+    assert done.stdout.splitlines()[1].startswith("[DCA-TAC-003] src/fx/alpha/domain/")
     done = subprocess.run(
         [sys.executable, "-m", "dca_rules", str(FIXTURES / "conforming" / "pyproject.toml")],
         capture_output=True,
@@ -278,3 +278,126 @@ def test_rules_json_knows_every_implemented_rule_and_marks_it() -> None:
     assert flagged == set(implemented())
     assert set(implemented()) <= set(catalogue())
     assert all(r["maturity"] == "experimental" for r in rules["rules"] if r["id"].startswith("DCA-PY-"))
+
+
+def test_the_rules_follow_renamed_packages_and_suffixes() -> None:
+    """Every package name and suffix the suite places or selects by is renamed in `[tool.dca]`, as Java's DcaLayout
+    renames them; the rules follow the configured names and ignore the defaults."""
+    project = fixture("renamed")
+    found = sorted(
+        f"{rule_id} {finding.location}"
+        for rule_id in implemented()
+        if rule_id not in LISTINGS
+        for finding in findings(project, rule_id)
+    )
+    assert found == [
+        "DCA-ADV-013 src/fx/alpha/domain/thing.py:20",
+        "DCA-HEX-008 src/fx/alpha/adapter/driving/stray.py:1",
+        "DCA-HEX-009 src/fx/alpha/application/common/__init__.py:13",
+        "DCA-NAM-001 src/fx/alpha/application/rename_part.py:18",
+        "DCA-NAM-003 src/fx/alpha/application/rename_part.py:14",
+        "DCA-NAM-004 src/fx/alpha/application/common/__init__.py:13",
+        "DCA-TAC-001 src/fx/alpha/domain/thing.py:16",
+    ]
+    assert all("application.common" in f.message for f in findings(project, "DCA-HEX-009"))
+    assert all(f.message.endswith("Service") for f in findings(project, "DCA-NAM-001"))
+    # Without the operation container the two use cases sit at two depths.
+    flat = Project(dataclasses.replace(project.layout, operation_containers=()))
+    assert findings(flat, "DCA-USE-014")
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"use_case_suffix": ""},
+        {"incoming": "in coming"},
+        {"repository_suffix": "1Repo"},
+        {"incoming": "adapters", "outgoing": "adapters"},
+        {"shared": "ports", "operation_containers": ("ports",)},
+    ],
+)
+def test_a_name_that_is_no_identifier_is_refused(tmp_path: pathlib.Path, values: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        DcaLayout(project_root=tmp_path, base_package="fx", **values)  # type: ignore[arg-type]
+
+
+def test_integration_events_live_in_a_context_events_package_beside_api() -> None:
+    """Java keeps {context}/events beside {context}/api: an integration event in api/events or in the shared kernel is
+    reported, one in a context's events package is not."""
+    located = {f.location.split(":")[0] for f in findings(fixture("violations"), "DCA-STR-007")}
+    assert "src/fx/beta/api/events/__init__.py" in located
+    assert "src/fx/sharedkernel/events/__init__.py" in located
+    assert not findings(fixture("conforming"), "DCA-STR-007")
+
+
+def test_the_shared_kernel_has_the_layers_of_a_context() -> None:
+    """The kernel's application, outgoing adapters and infrastructure are read as layers; an outgoing adapter of a
+    context may reuse the kernel's infrastructure, and the domain gateways may answer asynchronously."""
+    project = fixture("conforming")
+    places = {m.dotted: m.place for m in project.modules.values()}
+    assert places["fx.sharedkernel.application.shared"].layer == "application"
+    assert places["fx.sharedkernel.adapter.outgoing"].layer == "outgoing"
+    assert places["fx.sharedkernel.infrastructure"].layer == "infrastructure"
+    for rule_id in ("DCA-HEX-005", "DCA-ONI-004", "DCA-PY-004", "DCA-HEX-017", "DCA-LAY-008"):
+        assert not findings(project, rule_id), rule_id
+
+
+def _project(root: pathlib.Path, files: dict[str, str]) -> Project:
+    """A project written for one test: `files` maps a path below src/fx to its source."""
+    (root / "pyproject.toml").write_text('[tool.dca]\nbase-package = "fx"\nexperimental = "all"\n')
+    for path, source in {"__init__.py": "", **files}.items():
+        target = root / "src" / "fx" / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(source)
+    return Project(DcaLayout.from_pyproject(root / "pyproject.toml"))
+
+
+def test_a_feature_package_that_re_exports_its_use_case_closes_no_cycle(tmp_path: pathlib.Path) -> None:
+    use_case = (
+        "from dca_building_blocks import UseCase\n"
+        "from fx.alpha.application.things.support import Note\n"
+        "class KeepUseCase(UseCase[Note, Note]):\n    pass\n"
+    )
+    project = _project(
+        tmp_path,
+        {
+            "alpha/__init__.py": "",
+            "alpha/domain/__init__.py": "",
+            "alpha/application/__init__.py": "",
+            "alpha/application/things/__init__.py": "from fx.alpha.application.things.keep import KeepUseCase\n",
+            "alpha/application/things/keep.py": use_case,
+            "alpha/application/things/support.py": "from fx.alpha.application.things import KeepUseCase\nclass Note:\n"
+            "    pass\n",
+        },
+    )
+    outcome = run(project, "DCA-CYC-005")
+    assert outcome.selected and not outcome.findings, outcome.findings
+
+
+def test_the_composition_root_alone_is_no_dca_layer(tmp_path: pathlib.Path) -> None:
+    project = _project(tmp_path, {"infrastructure/__init__.py": "x = 1\n"})
+    assert findings(project, "DCA-STR-012")
+
+
+def test_an_implemented_anti_corruption_layer_has_its_translator() -> None:
+    found = [f.message for f in findings(fixture("violations"), "DCA-MAP-008")]
+    assert any(m.startswith("alpha declares epsilon via events behind an anti-corruption layer") for m in found)
+    assert any("uses the api of delta" in m for m in found)
+
+
+def test_a_bridge_is_exempt_by_itself_not_by_its_module() -> None:
+    found = [f.location for f in findings(fixture("violations"), "DCA-HEX-019")]
+    assert "src/fx/infrastructure/bridges.py:15" in found
+    assert not [location for location in found if location == "src/fx/infrastructure/bridges.py:5"]
+
+
+def test_transactions_follow_the_configured_apis() -> None:
+    layout = DcaLayout.from_pyproject(FIXTURES / "violations" / "pyproject.toml")
+    bare = Project(dataclasses.replace(layout, transaction_apis=(), transaction_decorators=()))
+    messages = [f.message for f in findings(bare, "DCA-LAY-004")]
+    assert messages and all("TransactionBoundary" in m for m in messages)
+
+
+def test_a_nested_class_is_a_class_of_its_own() -> None:
+    project = fixture("violations")
+    assert project.has(project.classes["fx.alpha.domain.crate.Shelf.Slot"], "Value")

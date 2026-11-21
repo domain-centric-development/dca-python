@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 from collections.abc import Callable, Iterator
 
-from dca_rules.model import Klass, Module, Project, dotted_name, parameters
+from dca_rules.model import BB, Klass, Module, Project, dotted_name, parameters
 from dca_rules.rules import Checked, Finding, rule
 
 
@@ -49,14 +50,16 @@ def hex_003(p: Project) -> Checked:
 @rule("DCA-HEX-008")
 def hex_008(p: Project) -> Checked:
     selected = [
-        k for k in p.classes.values() if not k.is_protocol and (k.name.endswith("Repository") or p.has(k, "Repository"))
+        k
+        for k in p.classes.values()
+        if not k.is_protocol and (k.name.endswith(p.layout.repository_suffix) or p.has(k, "Repository"))
     ]
     return Checked(
         len(selected),
         [
             Finding(k.where(), f"the class {k.name} sits in {k.module.dotted}, outside the outgoing adapters")
             for k in selected
-            if k.name.endswith("Repository") and k.place.layer != "outgoing"
+            if k.name.endswith(p.layout.repository_suffix) and k.place.layer != "outgoing"
         ],
     )
 
@@ -67,7 +70,7 @@ def hex_009(p: Project) -> Checked:
     return Checked(
         len(selected),
         [
-            Finding(k.where(), f"the protocol {k.name} in application.shared does not extend OutputPort")
+            Finding(k.where(), f"the protocol {k.name} in application.{p.layout.shared} does not extend OutputPort")
             for k in selected
             if not p.has(k, "OutputPort")
         ],
@@ -281,43 +284,165 @@ def hex_021(p: Project) -> Checked:
     return Checked(selected, found)
 
 
-def handlers(p: Project) -> Iterator[tuple[Module, ast.FunctionDef | ast.AsyncFunctionDef, str, ast.Call]]:
-    """(module, function, HTTP method, decorator) for every function a router decorator registers: a decorator
-    `<router>.<method>("/path", ...)` of the configured router methods."""
+HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
+
+
+@dataclasses.dataclass
+class Handler:
+    """A function or method that answers an HTTP method: registered by a router decorator, or a method of a
+    class-based view named after the HTTP method."""
+
+    module: Module
+    function: ast.FunctionDef | ast.AsyncFunctionDef
+    method: str
+    view: Klass | None = None
+
+
+def _registered(p: Project, module: Module, decorator: ast.expr) -> str | None:
+    """The HTTP method a router decorator registers its function for: `<router>.<method>(path, ...)` or an imported
+    `<method>(path, ...)` of the configured router methods, the path a literal or any expression; route/api_route
+    by its methods=[...]."""
+    if not isinstance(decorator, ast.Call):
+        return None
+    func = decorator.func
+    if isinstance(func, ast.Attribute):
+        method = func.attr
+    elif isinstance(func, ast.Name) and p.is_framework(p.resolve(module, func) or ""):
+        method = func.id
+    else:
+        return None
+    path = decorator.args[0] if decorator.args else next((k.value for k in decorator.keywords if k.arg == "path"), None)
+    if method not in p.layout.router_methods or path is None:
+        return None
+    if isinstance(path, ast.Constant) and not isinstance(path.value, str):
+        return None
+    if method in ("route", "api_route"):
+        methods = next((k.value for k in decorator.keywords if k.arg == "methods"), None)
+        names = [e.value for e in getattr(methods, "elts", []) if isinstance(e, ast.Constant)]
+        method = "get" if not names or "GET" in names else str(names[0]).lower()
+    return method
+
+
+def is_view(p: Project, klass: Klass) -> bool:
+    return any(any(a == b or a.startswith(b + ".") for b in p.layout.view_bases) for a in p.ancestors(klass))
+
+
+def handlers(p: Project) -> Iterator[Handler]:
+    """Every handler: a function a router decorator registers, and the HTTP-method methods of a class-based view."""
     for module in p.modules.values():
         for node in ast.walk(module.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for decorator in node.decorator_list:
-                if not (isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute)):
-                    continue
-                method = decorator.func.attr
-                path = decorator.args[0] if decorator.args else None
-                if method not in p.layout.router_methods or not (
-                    isinstance(path, ast.Constant) and isinstance(path.value, str) and path.value.startswith("/")
-                ):
-                    continue
-                if method in ("route", "api_route"):
-                    methods = next((k.value for k in decorator.keywords if k.arg == "methods"), None)
-                    names = [e.value for e in getattr(methods, "elts", []) if isinstance(e, ast.Constant)]
-                    method = "get" if not names or "GET" in names else str(names[0]).lower()
-                yield module, node, method, decorator
+                method = _registered(p, module, decorator)
+                if method is not None:
+                    yield Handler(module, node, method)
+                    break
+    for klass in p.classes.values():
+        if is_view(p, klass):
+            for name, function in klass.methods.items():
+                if name in HTTP_METHODS and not any(_registered(p, klass.module, d) for d in function.decorator_list):
+                    yield Handler(klass.module, function, name, klass)
+
+
+def _takes_command(p: Project, port: Klass) -> bool:
+    """An input port whose input is a command: `I` of its `UseCase[I, O]`, or a parameter of its execute."""
+    for klass in [port, *p.lineage(port)]:
+        for base in klass.node.bases:
+            if isinstance(base, ast.Subscript) and p.resolve(klass.module, base.value) in (
+                f"{BB}.UseCase",
+                f"{BB}.AsyncUseCase",
+            ):
+                arguments = base.slice.elts if isinstance(base.slice, ast.Tuple) else [base.slice]
+                if any(k.name.endswith("Command") for k in p.type_classes(klass.module, arguments[0])):
+                    return True
+        execute = klass.methods.get("execute")
+        if execute is not None and any(
+            k.name.endswith("Command") for a in parameters(execute) for k in p.type_classes(klass.module, a.annotation)
+        ):
+            return True
+    return False
+
+
+def _bodies(p: Project, handler: Handler) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]]:
+    """The handler, then what it calls of its own: a function of its module, or a method of its view."""
+    out: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]] = [(handler.function, "")]
+    for node in ast.walk(handler.function):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        found: ast.AST | None = None
+        if isinstance(func, ast.Name):
+            found = handler.module.defined.get(func.id)
+        elif (
+            handler.view is not None
+            and isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "self"
+        ):
+            found = handler.view.methods.get(func.attr)
+        if isinstance(found, (ast.FunctionDef, ast.AsyncFunctionDef)) and all(found is not b for b, _ in out):
+            out.append((found, f", through {found.name},"))
+    return out
 
 
 @rule("DCA-HEX-014")
 def hex_014(p: Project) -> Checked:
-    found = []
-    selected = [(module, function) for module, function, method, _ in handlers(p) if method == "get"]
-    for module, function in selected:
-        for call, klass in p.constructions(module, function):
-            if klass.name.endswith("Command"):
-                found.append(
-                    Finding(
-                        module.where(call),
-                        f"the GET handler {function.name} drives an input port with the command {klass.name}",
+    """Selects the handlers of GET. None - nor a function of its module or a method of its view it calls - names a
+    command class of the application (built, taken or annotated) or calls an input port that takes a command."""
+    found: dict[tuple[str, str], Finding] = {}
+    selected = [h for h in handlers(p) if h.method == "get"]
+    for handler in selected:
+        module = handler.module
+        fields = {}
+        if handler.view is not None:
+            fields = {f.name: [k for k in p.type_classes(f.module, f.annotation)] for f in p.all_fields(handler.view)}
+        for body, via in _bodies(p, handler):
+            for node, name in p.refs(module, body):
+                klass = p.classes.get(name)
+                if klass is not None and klass.name.endswith("Command") and klass.place.layer == "application":
+                    where = module.where(node)
+                    found.setdefault(
+                        (where, klass.name),
+                        Finding(where, f"the GET handler {handler.function.name}{via} drives the command {klass.name}"),
                     )
-                )
-    return Checked(len(selected), found)
+            ports: dict[str, Klass] = {}
+            for item in ast.walk(body):
+                named: list[tuple[str, ast.expr | None]] = []
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    named = [(a.arg, a.annotation) for a in parameters(item)]
+                elif isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    named = [(item.target.id, item.annotation)]
+                for local, annotation in named:
+                    for klass in p.type_classes(module, annotation):
+                        if p.has(klass, "InputPort") and _takes_command(p, klass):
+                            ports[local] = klass
+            for item in ast.walk(body):
+                if not (isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute)):
+                    continue
+                receiver = item.func.value
+                port = ports.get(receiver.id) if isinstance(receiver, ast.Name) else None
+                if (
+                    port is None
+                    and isinstance(receiver, ast.Attribute)
+                    and isinstance(receiver.value, ast.Name)
+                    and receiver.value.id == "self"
+                ):
+                    port = next(
+                        (k for k in fields.get(receiver.attr, []) if p.has(k, "InputPort") and _takes_command(p, k)),
+                        None,
+                    )
+                if port is not None:
+                    where = module.where(item)
+                    found.setdefault(
+                        (where, port.name),
+                        Finding(
+                            where,
+                            f"the GET handler {handler.function.name}{via} calls {item.func.attr} on {port.name}, "
+                            "an input port that takes a command",
+                        ),
+                    )
+    return Checked(len(selected), list(found.values()))
 
 
 @rule("DCA-HEX-016")
@@ -341,22 +466,30 @@ def hex_016(p: Project) -> Checked:
 
 @rule("DCA-HEX-018")
 def hex_018(p: Project) -> Checked:
-    selected = [(module, function) for module, function, _, _ in handlers(p)]
+    """Selects the handlers: the functions router decorators register, and the class-based views (once each)."""
+    selected: dict[int, tuple[Module, ast.AST, str]] = {}
+    for h in handlers(p):
+        node: ast.AST = h.view.node if h.view is not None else h.function
+        name = h.view.name if h.view is not None else h.function.name
+        selected.setdefault(id(node), (h.module, node, name))
     return Checked(
         len(selected),
         [
-            Finding(
-                module.where(function),
-                f"the handler {function.name} sits in {module.dotted}, outside the incoming adapters",
-            )
-            for module, function in selected
+            Finding(module.where(node), f"the handler {name} sits in {module.dotted}, outside the incoming adapters")
+            for module, node, name in selected.values()
             if module.place.layer != "incoming"
         ],
     )
 
 
 def drives_an_input_port(p: Project, klass: Klass) -> bool:
-    return any(p.has(k, "InputPort") for _, k in named_classes(p, klass.module) if k.qualname != klass.qualname) or any(
+    """The class itself depends on an input port: names a class with the InputPort role in its fields, its methods'
+    parameters or their bodies, or calls execute."""
+    named = [k for f in p.all_fields(klass) for k in p.type_classes(f.module, f.annotation)]
+    for method in klass.methods.values():
+        named += [k for a in parameters(method) for k in p.type_classes(klass.module, a.annotation)]
+        named += [p.classes[n] for _, n in p.refs(klass.module, method) if n in p.classes]
+    return any(p.has(k, "InputPort") for k in named if k.qualname != klass.qualname) or any(
         isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "execute"
         for n in ast.walk(klass.node)
     )
@@ -364,12 +497,17 @@ def drives_an_input_port(p: Project, klass: Klass) -> bool:
 
 @rule("DCA-HEX-019")
 def hex_019(p: Project) -> Checked:
+    """Selects every implementation of an output port, repositories and stores included; a class in an
+    infrastructure package - a context's or the composition root - that itself drives an input port is the bridge
+    that hands an output port a second use case: wiring, not selected."""
     found = []
-    selected = [k for k in p.with_role("OutputPort") if not k.is_protocol]
+    selected = [
+        k
+        for k in p.with_role("OutputPort")
+        if not k.is_protocol and not (k.place.layer in ("root", "infrastructure") and drives_an_input_port(p, k))
+    ]
     for klass in selected:
-        if p.roles(klass) & {"Repository", "Store"} or klass.place.layer == "outgoing":
-            continue
-        if klass.place.layer == "root" and drives_an_input_port(p, klass):
+        if klass.place.layer == "outgoing":
             continue
         found.append(
             Finding(
@@ -445,9 +583,13 @@ def str_007(p: Project) -> Checked:
     return Checked(
         len(selected),
         [
-            Finding(k.where(), f"the integration event {k.name} sits in {k.module.dotted}, outside api.events")
+            Finding(
+                k.where(),
+                f"the integration event {k.name} sits in {k.module.dotted}, outside a context's {p.layout.events} "
+                "package - one context's published contract, never the shared kernel's",
+            )
             for k in selected
-            if not (k.place.layer == "api" and k.place.sub == "events")
+            if not (k.place.layer == "events" and not k.place.kernel)
         ],
     )
 
@@ -458,11 +600,11 @@ def str_008(p: Project) -> Checked:
     selected = p.with_role("IntegrationEvent")
     for event in selected:
         found += [
-            Finding(event.module.where(f.line), f"{event.name}.{f.name} is a mutable collection")
+            Finding(f.module.where(f.line), f"{event.name}.{f.name} is a mutable collection")
             for f in p.mutable_fields(event)
         ]
         found += [
-            Finding(event.module.where(n), f"{event.name}.{name} changes its state") for name, n in p.mutators(event)
+            Finding(home.where(n), f"{event.name}.{name} changes its state") for name, n, home in p.mutators(event)
         ]
     return Checked(len(selected), found)
 
@@ -474,7 +616,7 @@ def str_010(p: Project) -> Checked:
 
 @rule("DCA-STR-013")
 def str_013(p: Project) -> Checked:
-    selected = [k for k in p.classes.values() if k.place.layer == "api" and k.place.sub == "events"]
+    selected = [k for k in p.classes.values() if k.place.layer == "events"]
     return Checked(
         len(selected),
         [

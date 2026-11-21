@@ -67,9 +67,7 @@ def planned(call: ast.Call) -> bool:
 
 
 def channel_of(p: Project, place_layer: str | None, sub: str | None) -> str | None:
-    if place_layer != "api":
-        return None
-    return "events" if sub == "events" else "api"
+    return place_layer if place_layer in ("api", "events") else None
 
 
 def edges(p: Project) -> list[tuple[Module, int, str, str, str]]:
@@ -186,25 +184,44 @@ def map_007(p: Project) -> Checked:
     return Checked(_upstreams(contexts), found)
 
 
-def _upstream(contexts: dict[str, Declared], src: str, dst: str) -> ast.Call | None:
+def _upstream(contexts: dict[str, Declared], src: str, dst: str, channel: str) -> ast.Call | None:
+    """The Upstream the context `src` declares towards `dst` over `channel`: two declarations towards one context
+    over two channels are two relationships, each with its own translation."""
     by_package = {d.package: d for d in contexts.values()}
     source, target = by_package.get(src), by_package.get(dst)
     if source is None or target is None:
         return None
-    return next((c for c in source.upstreams if text(c, "context", 0) == target.name), None)
+    return next(
+        (c for c in source.upstreams if text(c, "context", 0) == target.name and channel in members(c, "via")), None
+    )
+
+
+def _acl(call: ast.Call) -> bool:
+    return "acl" in translation(call) or "anti" in translation(call)
+
+
+def _wanted(channel: str) -> str:
+    """The adapter that translates a channel behind an anti-corruption layer."""
+    return "outgoing" if channel == "api" else "incoming"
 
 
 @rule("DCA-MAP-008")
 def map_008(p: Project) -> Checked:
-    """Selects the imports into another context's api."""
+    """Selects the Upstream declarations with an anti-corruption layer towards a declared context."""
     contexts = declared(p)
     found = []
-    selected = edges(p)
-    for module, line, src, dst, channel in selected:
-        call = _upstream(contexts, src, dst)
-        if call is None or ("acl" not in translation(call) and "anti" not in translation(call)):
+    selected = [
+        (d, call, contexts[text(call, "context", 0)])
+        for d in contexts.values()
+        for call in d.upstreams
+        if _acl(call) and text(call, "context", 0) in contexts and text(call, "context", 0) != d.name
+    ]
+    # Placement: behind the layer only the matching adapter uses the channel.
+    for module, line, src, dst, channel in edges(p):
+        call = _upstream(contexts, src, dst, channel)
+        if call is None or not _acl(call):
             continue
-        wanted = "outgoing" if channel == "api" else "incoming"
+        wanted = _wanted(channel)
         if module.place.layer != wanted:
             found.append(
                 Finding(
@@ -213,6 +230,31 @@ def map_008(p: Project) -> Checked:
                     f"anti-corruption layer only the {wanted} adapter does",
                 )
             )
+    # Presence: an implemented declaration has its translator - a module of the matching adapter that uses both the
+    # channel and its own context's domain or application.
+    translators: set[tuple[str, str, str]] = set()
+    for module in p.modules.values():
+        own = module.place.context
+        if own is None or module.place.layer not in ("incoming", "outgoing"):
+            continue
+        targets = [place for _, _, place in project_imports(p, module)]
+        inward = any(t.context == own and t.layer in ("domain", "application") for t in targets)
+        for place in targets:
+            used = channel_of(p, place.layer, place.sub)
+            if inward and used and place.context and place.context != own and module.place.layer == _wanted(used):
+                translators.add((own, place.context, used))
+    for d, call, target in selected:
+        if planned(call):
+            continue
+        for channel in dict.fromkeys(members(call, "via")):
+            if (d.package, target.package, channel) not in translators:
+                found.append(
+                    Finding(
+                        d.module.where(call),
+                        f"{d.name} declares {target.name} via {channel} behind an anti-corruption layer; no module of "
+                        f"its {_wanted(channel)} adapter uses both that channel and its own domain or application",
+                    )
+                )
     return Checked(len(selected), found)
 
 
@@ -225,12 +267,24 @@ def map_009(p: Project) -> Checked:
         len(selected),
         [
             Finding(m.where(line), f"{m.dotted} lets the contract of {dst} into the domain")
-            for m, line, src, dst, _ch in selected
+            for m, line, src, dst, ch in selected
             if m.place.layer == "domain"
-            and (c := _upstream(contexts, src, dst)) is not None
+            and (c := _upstream(contexts, src, dst, ch)) is not None
             and "conformist" in translation(c)
         ],
     )
+
+
+def _contract_imports(module: Module, packages: list[str]) -> list[tuple[int, str]]:
+    """(line, name) for every import that reaches into one of the contract packages: the module imported, or a name
+    imported from a module above it (`from vendor import sdk` reaches `vendor.sdk`)."""
+    out = []
+    for item in module.imports:
+        for name in (item.module, *item.absolute):
+            if any(name == c or name.startswith(c + ".") for c in packages):
+                out.append((item.line, name))
+                break
+    return out
 
 
 @rule("DCA-MAP-010")
@@ -248,9 +302,7 @@ def map_010(p: Project) -> Checked:
             for module in p.modules.values():
                 if module.place.context != d.package:
                     continue
-                for line, target in p.import_targets(module):
-                    if not any(target == c or target.startswith(c + ".") for c in packages):
-                        continue
+                for line, target in _contract_imports(module, packages):
                     wanted = "outgoing" if outbound else "incoming"
                     if (acl and module.place.layer != wanted) or (not acl and module.place.layer == "domain"):
                         found.append(
@@ -271,8 +323,8 @@ def map_011(p: Project) -> Checked:
     found = []
     selected = edges(p)
     for module, line, src, dst, channel in selected:
-        call = _upstream(contexts, src, dst)
-        if call is None or channel not in members(call, "via"):
+        call = _upstream(contexts, src, dst, channel)
+        if call is None:
             name = by_package[dst].name if dst in by_package else dst
             found.append(
                 Finding(

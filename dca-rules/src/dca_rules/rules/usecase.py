@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 
-from dca_rules.model import BB, Klass, Project, dotted_name, parameters, public
+from dca_rules.model import BB, Klass, Module, Project, dotted_name, parameters, public
 from dca_rules.rules import Checked, Finding, rule
 from dca_rules.rules.hexagonal import is_use_case
 
-WRITES = ("save", "delete", "delete_by_id", "remove", "add", "insert", "update", "append", "put", "store")
+#: Verbs that write, as a method name or its first word (`save`, `save_all`, `upsert_many`).
+WRITES = (
+    "save",
+    "delete",
+    "remove",
+    "add",
+    "insert",
+    "update",
+    "upsert",
+    "put",
+    "store",
+    "write",
+    "create",
+    "append",
+    "archive",
+    "purge",
+    "clear",
+    "set",
+    "mark",
+)
 PUBLISHES = ("publish", "publish_and_clear_events")
 
 
@@ -34,8 +54,10 @@ def use_001(p: Project) -> Checked:
     )
 
 
-def _placed(p: Project, suffix: str, layers: tuple[str, ...], where: str) -> Checked:
-    selected = [k for k in suffixed(p, suffix) if not p.has(k, "Value")]
+def _placed(p: Project, suffix: str, layers: tuple[str, ...], where: str, values_too: bool = True) -> Checked:
+    """Classes named with a suffix, placed in the layers; a value named so is selected unless `values_too` is off
+    (a result may be a domain value)."""
+    selected = [k for k in suffixed(p, suffix) if values_too or not p.has(k, "Value")]
     return Checked(
         len(selected),
         [
@@ -63,7 +85,7 @@ def _immutable(p: Project, suffix: str) -> Checked:
         if not p.is_immutable_shape(klass):
             found.append(Finding(klass.where(), f"{klass.name} is no frozen dataclass, NamedTuple or enum"))
         found += [
-            Finding(klass.module.where(f.line), f"{klass.name}.{f.name} is a mutable collection")
+            Finding(f.module.where(f.line), f"{klass.name}.{f.name} is a mutable collection")
             for f in p.mutable_fields(klass)
         ]
     return Checked(len(selected), found)
@@ -81,7 +103,7 @@ def use_005(p: Project) -> Checked:
 
 @rule("DCA-USE-006")
 def use_006(p: Project) -> Checked:
-    return _placed(p, "Result", ("application",), "the application")
+    return _placed(p, "Result", ("application",), "the application", values_too=False)
 
 
 @rule("DCA-USE-007")
@@ -94,28 +116,67 @@ def use_008(p: Project) -> Checked:
     return _placed(p, "Response", ("incoming", "outgoing", "adapter"), "the adapters")
 
 
-def receiver_calls(p: Project, klass: Klass, roles: set[str], names: tuple[str, ...]) -> list[ast.Call]:
+def receiver_calls(
+    p: Project, klass: Klass, roles: set[str], accept: Callable[[str], bool]
+) -> list[tuple[ast.Call, Module, str]]:
+    """(call, its module, the method it sits in) for every call whose name `accept`s on a receiver that holds one of
+    the roles - `self.<attr>`, a typed parameter or local, an alias - in the methods of the class and its role-less
+    bases."""
     return [
-        call
-        for method in klass.methods.values()
-        for call, name, held in p.calls(klass, method)
-        if name in names and held & roles
+        (call, owner.module, name)
+        for owner, name, method in p.member_methods(klass)
+        for call, called, held in p.calls(klass, method)
+        if accept(called) and held & roles
     ]
+
+
+def _own_references(p: Project, klass: Klass, node: ast.AST) -> set[str]:
+    """The methods of the class (and its role-less bases) a piece of code names on `self`: called or handed on."""
+    names = {name for _, name, _ in p.member_methods(klass)}
+    return {
+        n.attr
+        for n in ast.walk(node)
+        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "self" and n.attr in names
+    }
+
+
+def reaches(p: Project, klass: Klass, hits: set[str]) -> set[str]:
+    """The methods that run one of `hits` themselves or through the methods of their own they name, transitively."""
+    methods = {name: method for _, name, method in p.member_methods(klass)}
+    out = set(hits)
+    changed = True
+    while changed:
+        changed = False
+        for name, method in methods.items():
+            if name not in out and _own_references(p, klass, method) & out:
+                out.add(name)
+                changed = True
+    return out
+
+
+def entry_points(p: Project, klass: Klass) -> list[tuple[Klass, str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+    return [(o, n, m) for o, n, m in p.member_methods(klass) if public(n) or n == "__call__"]
 
 
 @rule("DCA-USE-009")
 def use_009(p: Project) -> Checked:
+    """Selects the use cases; each entry point that saves an aggregate - itself or through its own methods - also
+    calls publish_and_clear_events."""
     found = []
     selected = use_cases(p)
     for use_case in selected:
-        saves = receiver_calls(p, use_case, {"Repository"}, ("save",))
-        if saves and not receiver_calls(p, use_case, {"DomainEventPublisher"}, PUBLISHES):
-            found.append(
-                Finding(
-                    use_case.module.where(saves[0]),
-                    f"{use_case.name} saves an aggregate and publishes none of its events",
+        saves = receiver_calls(p, use_case, {"Repository"}, lambda n: n == "save")
+        publishes = receiver_calls(p, use_case, {"DomainEventPublisher"}, lambda n: n == "publish_and_clear_events")
+        saving = reaches(p, use_case, {m for _, _, m in saves})
+        publishing = reaches(p, use_case, {m for _, _, m in publishes})
+        for owner, name, method in entry_points(p, use_case):
+            if name in saving and name not in publishing:
+                found.append(
+                    Finding(
+                        owner.module.where(method),
+                        f"{use_case.name}.{name} saves an aggregate and never calls publish_and_clear_events",
+                    )
                 )
-            )
     return Checked(len(selected), found)
 
 
@@ -181,22 +242,58 @@ def transactional(klass: Klass) -> list[ast.AST]:
 
 @rule("DCA-USE-012")
 def use_012(p: Project) -> Checked:
+    """Selects the use cases. A write counts as inside the boundary in the work handed to `in_transaction`, and in a
+    method of its own that only such work runs - transitively; a method an entry point also runs outside the work is
+    outside."""
     found = []
     selected = use_cases(p)
     for use_case in selected:
-        inside = {id(n) for scope in transactional(use_case) for n in ast.walk(scope)}
-        writes = receiver_calls(p, use_case, {"Repository"}, ("save", "delete", "delete_by_id")) + receiver_calls(
-            p, use_case, {"DomainEventPublisher"}, PUBLISHES
-        )
-        for call in writes:
-            if id(call) not in inside:
-                found.append(
-                    Finding(
-                        use_case.module.where(call),
-                        f"{use_case.name} writes outside its transaction "
-                        "boundary: hand the work to TransactionBoundary.in_transaction",
-                    )
+        scopes = transactional(use_case)
+        inside = {id(n) for scope in scopes for n in ast.walk(scope)}
+        # The work handed over by name (`in_transaction(self._work)`) runs inside, not where it is named.
+        inside |= {
+            id(n.args[0])
+            for n in ast.walk(use_case.node)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr in ("in_transaction", "in_transaction_closed")
+            and n.args
+        }
+        methods = {name: method for _, name, method in p.member_methods(use_case)}
+        covered: set[str] = set()
+        for scope in scopes:
+            covered |= _own_references(p, use_case, scope)
+        outside: set[str] = set()
+        todo = [n for _, n, _ in entry_points(p, use_case)]
+        while todo:
+            name = todo.pop()
+            if name in outside or name not in methods:
+                continue
+            outside.add(name)
+            loose = ast.Module(body=[], type_ignores=[])
+            for node in ast.walk(methods[name]):
+                if id(node) not in inside and isinstance(node, ast.Attribute):
+                    loose.body.append(ast.Expr(node))
+            todo += _own_references(p, use_case, loose)
+        todo = list(covered)
+        while todo:
+            name = todo.pop()
+            more = _own_references(p, use_case, methods[name]) - covered if name in methods else set()
+            covered |= more
+            todo += more
+        writes = receiver_calls(
+            p, use_case, {"Repository"}, lambda n: n in ("save", "delete", "delete_by_id")
+        ) + receiver_calls(p, use_case, {"DomainEventPublisher"}, lambda n: n in PUBLISHES)
+        for call, module, method in writes:
+            if id(call) in inside or (method in covered and method not in outside):
+                continue
+            found.append(
+                Finding(
+                    module.where(call),
+                    f"{use_case.name} writes outside its transaction "
+                    "boundary: hand the work to TransactionBoundary.in_transaction",
                 )
+            )
     return Checked(len(selected), found)
 
 
@@ -245,21 +342,51 @@ def use_015(p: Project) -> Checked:
     return Checked(len(selected), found)
 
 
+def _depends_on(p: Project, klass: Klass) -> list[tuple[ast.AST, Module, Klass]]:
+    """(node, module, class) for every project class a class depends on: in its fields, the parameters and the
+    annotated locals of its methods, and every name its methods mention; its role-less bases' included."""
+    out: list[tuple[ast.AST, Module, Klass]] = []
+    for field in p.member_fields(klass):
+        out += [
+            (ast.Constant(None, lineno=field.line), field.module, k)
+            for k in p.type_classes(field.module, field.annotation)
+        ]
+    for owner, _, method in p.member_methods(klass):
+        for argument in parameters(method):
+            out += [(argument, owner.module, k) for k in p.type_classes(owner.module, argument.annotation)]
+        for node, name in p.refs(owner.module, ast.Module(body=method.body, type_ignores=[])):
+            if name in p.classes:
+                out.append((node, owner.module, p.classes[name]))
+    return out
+
+
 @rule("DCA-USE-016")
 def use_016(p: Project) -> Checked:
-    found = []
+    """Selects the use cases. None depends on another input port - directly, or through a class of its own module in
+    the application that is no input port itself; its own interfaces and bases are no dependency."""
+    found: dict[tuple[str, str], Finding] = {}
     selected = use_cases(p)
     for use_case in selected:
-        for field in use_case.fields:
-            for named in p.type_classes(use_case.module, field.annotation):
-                if p.has(named, "InputPort"):
-                    found.append(
-                        Finding(
-                            use_case.module.where(field.line),
-                            f"{use_case.name}.{field.name} holds the use case {named.name}",
+        own = p.ancestors(use_case) | {use_case.qualname}
+        for node, module, named in _depends_on(p, use_case):
+            if named.qualname in own:
+                continue
+            if p.has(named, "InputPort"):
+                where = module.where(node)
+                found.setdefault(
+                    (where, named.qualname), Finding(where, f"{use_case.name} -> {named.name}: a use case drives none")
+                )
+            elif named.module is use_case.module and named.place.layer == "application":
+                for _, _, further in _depends_on(p, named):
+                    if p.has(further, "InputPort") and further.qualname not in own:
+                        where = module.where(node)
+                        found.setdefault(
+                            (where, further.qualname),
+                            Finding(
+                                where, f"{use_case.name} -> {further.name} via {named.name}: a use case drives none"
+                            ),
                         )
-                    )
-    return Checked(len(selected), found)
+    return Checked(len(selected), list(found.values()))
 
 
 @rule("DCA-USE-017")
@@ -299,10 +426,25 @@ def use_018(p: Project) -> Checked:
 
 
 def input_type(p: Project, use_case: Klass) -> list[Klass]:
+    """What a use case takes: the parameters of its execute, and `I` of the `UseCase[I, O]` it names among its bases,
+    transitively."""
+    out: list[Klass] = []
     execute = use_case.methods.get("execute")
-    if execute is None:
-        return []
-    return [n for a in parameters(execute) for n in p.type_classes(use_case.module, a.annotation)]
+    if execute is not None:
+        out += [n for a in parameters(execute) for n in p.type_classes(use_case.module, a.annotation)]
+    for klass in [use_case, *p.lineage(use_case)]:
+        for base in klass.node.bases:
+            if isinstance(base, ast.Subscript) and p.resolve(klass.module, base.value) in (
+                f"{BB}.UseCase",
+                f"{BB}.AsyncUseCase",
+            ):
+                arguments = base.slice.elts if isinstance(base.slice, ast.Tuple) else [base.slice]
+                out += p.type_classes(klass.module, arguments[0])
+    return out
+
+
+def _writes(name: str) -> bool:
+    return any(name == v or name.startswith(f"{v}_") for v in WRITES)
 
 
 @rule("DCA-USE-019")
@@ -310,24 +452,25 @@ def use_019(p: Project) -> Checked:
     found = []
     selected = [u for u in use_cases(p) if any(k.name.endswith("Query") for k in input_type(p, u))]
     for use_case in selected:
-        for call in receiver_calls(p, use_case, {"Repository", "Store"}, WRITES) + receiver_calls(
-            p, use_case, {"DomainEventPublisher", "IntegrationEventPublisher"}, PUBLISHES
+        for call, module, _ in receiver_calls(p, use_case, {"Repository", "Store"}, _writes) + receiver_calls(
+            p, use_case, {"DomainEventPublisher", "IntegrationEventPublisher"}, lambda n: True
         ):
-            found.append(Finding(use_case.module.where(call), f"the query use case {use_case.name} writes"))
+            found.append(Finding(module.where(call), f"the query use case {use_case.name} writes"))
     return Checked(len(selected), found)
 
 
 @rule("DCA-USE-020")
 def use_020(p: Project) -> Checked:
+    """Selects the modules of the application."""
     found = []
-    selected = use_cases(p)
-    for use_case in selected:
-        for node in ast.walk(use_case.node):
-            if isinstance(node, ast.Call) and p.resolve(use_case.module, node.func) == "uuid.UUID":
+    selected = p.in_layer("application")
+    for module in selected:
+        for node in ast.walk(module.tree):
+            if isinstance(node, ast.Call) and p.resolve(module, node.func) == "uuid.UUID":
                 found.append(
                     Finding(
-                        use_case.module.where(node),
-                        f"{use_case.name} parses raw input into a UUID; the adapter or the id's own constructor does",
+                        module.where(node),
+                        f"{module.dotted} parses raw input into a UUID; the adapter or the id's own constructor does",
                     )
                 )
     return Checked(len(selected), found)
@@ -340,9 +483,9 @@ def use_021(p: Project) -> Checked:
     return Checked(
         len(selected),
         [
-            Finding(k.module.where(node), f"the use case {k.name} keeps state: {name} assigns to self")
+            Finding(home.where(node), f"the use case {k.name} keeps state: {name} assigns to self")
             for k in selected
-            for name, node in p.mutators(k)
+            for name, node, home in p.mutators(k)
         ],
     )
 

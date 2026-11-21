@@ -213,8 +213,15 @@ class Specification[T](abc.ABC):
 
 
 class DomainGateway(typing.Protocol):
-    """An interface the domain declares to obtain facts it does not hold, in its own language, implemented by an
-    outgoing adapter. It never writes to the outside: it enriches the model so the model can decide."""
+    """An interface the domain declares to obtain facts it does not hold, or to delegate a technology-bound
+    computation, in its own language, implemented by an outgoing adapter.
+
+    A domain service, the use case, or a model method that receives it as a parameter calls it. An aggregate,
+    entity, value, factory or specification that needs it takes it in the signature of the method that needs it, and
+    the domain service or the use case passes it in; it never holds a gateway in an attribute, never looks one up from
+    a registry and never builds an implementation itself, so the dependency stays visible in the signature and the
+    model keeps no reference to the outside between two calls. It never writes to the outside: it enriches the model
+    so the model can decide."""
 
 
 class DomainException(Exception):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from dca_building_blocks import DomainEvent, DomainEventPublisher, TransactionBoundary
+from dca_building_blocks import DomainEvent, DomainEventPublisher, EventListener, TransactionBoundary
 from fx.alpha.application.shared import Tally, ThingJournal, ThingRepository
 from fx.alpha.domain.thing import Thing, ThingId
 from fx.sharedkernel.domain.owner import OwnerId
@@ -60,3 +60,20 @@ class ListPublisher(DomainEventPublisher):
 class DirectTransactions(TransactionBoundary):
     def in_transaction[T](self, work: Callable[[], T], /) -> T:
         return work()
+
+
+def outbox_limit() -> int:
+    """An outgoing adapter may reuse the shared kernel's infrastructure (DCA-HEX-005)."""
+    from fx.sharedkernel.infrastructure import Settings
+
+    return Settings().limit
+
+
+class JournalOnEvent(EventListener[DomainEvent]):
+    """Reacts inside the publishing transaction and writes through an output port alone (DCA-HEX-017)."""
+
+    def __init__(self, journal: ThingJournal) -> None:
+        self._journal = journal
+
+    def on(self, event: DomainEvent, /) -> None:
+        return None

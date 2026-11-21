@@ -92,10 +92,10 @@ class AddPartUseCase(AddPartInputPort):
         self._events = events
         self._other = other  # DCA-USE-016
 
-    def execute(self, command: AddPartCommand, /) -> AddPartResult:
+    def execute(self, command: AddPartCommand, /) -> AddPartResult:  # DCA-USE-009: saves, publishes nothing
         uuid.UUID(command.raw)  # DCA-USE-020
         thing = self._things.find_by_id(command.raw)
-        self._things.save(thing)  # DCA-USE-009, DCA-USE-012
+        self._things.save(thing)  # DCA-USE-012
         if thing is None:
             raise ThingFull()  # DCA-ERR-009
         return AddPartResult()

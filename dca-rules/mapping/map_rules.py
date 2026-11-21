@@ -21,24 +21,48 @@ import json
 import sys
 
 # The layout the selections speak about (see dca_rules/layout.py): <base>.<context>.{domain, application[.shared],
-# adapter.incoming[.event|.web], adapter.outgoing, infrastructure, api[.events]}, <base>.sharedkernel,
+# adapter.incoming[.event|.web], adapter.outgoing, infrastructure, api, events}, <base>.sharedkernel (the same layers,
+# no api and no events),
 # <base>.infrastructure (the composition root). A role is a building block named among a class's bases, transitively.
+# An interface is Java's interface: a typing.Protocol class, or an abc.ABC (or abc.ABCMeta class) whose methods are all
+# abstract and that holds no field. Every class is read, a nested one as a class of its own. A class's fields are its
+# class-level annotations and the self.<name> assignments of every method, typed by their annotation, the parameter
+# assigned or the class a call constructs; a rule over a class reads the fields and methods of its bases that carry no
+# role as its own.
 LAYOUT = {
     "declaration": "[tool.dca] in pyproject.toml; a context: __dca__ = BoundedContext(...) in its __init__.py",
-    "layers": ["domain", "application", "adapter.incoming", "adapter.outgoing", "infrastructure", "api"],
+    "layers": ["domain", "application", "adapter.incoming", "adapter.outgoing", "infrastructure", "api", "events"],
     "applicationShared": "shared",
     "adapterModules": {"incoming": "adapter.incoming", "outgoing": "adapter.outgoing", "event": "event", "web": "web"},
-    "apiModules": {"api": "api", "events": "api.events"},
+    "publishedPackages": {"api": "api", "events": "events"},
     "sharedKernel": "sharedkernel",
     "compositionRoot": "infrastructure",
+    # Every package name above is renamed in [tool.dca] under its own key (incoming, outgoing, shared, event, web,
+    # api, events, shared-kernel, infrastructure, domain, application, adapter), as are the suffixes and the operation
+    # containers (Java's DcaLayout with...Subpackage, with...Suffix, withOperationContainers); a rule's text names
+    # the default.
+    "configurable": {
+        "operationContainers": [],
+        "suffixes": {
+            "use-case-suffix": "UseCase",
+            "input-port-suffix": "InputPort",
+            "aggregate-root-suffix": "AggregateRoot",
+            "repository-suffix": "Repository",
+            "store-suffix": "Store",
+            "factory-suffix": "Factory",
+            "specification-suffix": "Specification",
+        },
+    },
 }
 
 TC, LI, AT, RF, NA = "type-checker", "linter", "ast-test", "reformulated", "n/a"
 IMP, S, R, M, F = "imports", "source", "runtime", "mypy", "ruff"
 
 META_CHK = (
-    "No decorator, no base and no field default (Field(...), Column(...)) comes from a configured framework "
-    "(django, fastapi, flask, litestar, marshmallow, pydantic, sqlalchemy, sqlmodel, starlette by default)."
+    "No decorator of the class or of one of its methods, no base, no default of a field or a class attribute "
+    "(Field(...), Column(...)) or of a method parameter (Depends(...)), and no metadata of an Annotated[...] "
+    "annotation of a field or a parameter comes from a configured framework (django, fastapi, flask, litestar, "
+    "marshmallow, pydantic, sqlalchemy, sqlmodel, starlette by default)."
 )
 
 
@@ -77,10 +101,16 @@ MAPPING = {
     "DCA-LAY-004": m(
         RF,
         [S],
-        "Modules in a domain package or an incoming adapter.",
-        "None names the building block TransactionBoundary or declares a transaction with a framework "
-        "decorator (transaction.atomic, ...). Python has no declarative transaction on a use case in "
-        "DCA's reading: the boundary is the explicit port, held by the application.",
+        "Every module in a layer. Read: transactional decorators (transaction-decorators: Django's atomic, "
+        "transactional, Transactional by default, matched by qualified name or its last segments); a transaction run "
+        "in code (transaction-apis: django.db.transaction.atomic called or entered, and .begin / .begin_nested entered "
+        "in a with on any receiver, by default); and the building block TransactionBoundary (or "
+        "AsyncTransactionBoundary) named - wiring - apart "
+        "from the base of an implementation, which is never selected.",
+        "Decorators and transactions run in code sit in an application package or an outgoing adapter; a domain, an "
+        "incoming adapter, a context's infrastructure and the composition root are reported. TransactionBoundary is "
+        "named in those two and in the composition root and the shared kernel's infrastructure as well; a domain, an "
+        "incoming adapter and a context's infrastructure are reported.",
     ),
     "DCA-LAY-005": m(
         NA,
@@ -93,15 +123,19 @@ MAPPING = {
         [S],
         "Every module below the base package.",
         "Informational - lists every module that sits in no layer (outside domain, application, adapter, "
-        "infrastructure, api of a context, the shared kernel and the composition root), and never fails.",
+        "infrastructure, api, events of a context, the shared kernel and the composition root), and never fails.",
     ),
     "DCA-LAY-008": m(
         AT,
         [IMP],
-        "Modules in an application package. Planned: the suite does not implement it yet.",
-        "No import of a configured persistence or transaction library (sqlalchemy, sqlite3, psycopg, pymongo, "
-        "django.db by default). A decorator the framework preset names as transactional passes; a session, a "
-        "connection or a transaction opened in the use case does not.",
+        "Modules in an application package, the shared kernel's included; every import, function-level and "
+        "TYPE_CHECKING imports too.",
+        "None imports a module of a configured persistence or transaction library (persistence-apis: sqlite3, "
+        "sqlalchemy, sqlmodel, psycopg, psycopg2, asyncpg, pymongo, motor, peewee, tortoise, django.db by default; "
+        "a prefix covers its submodules). A session, a connection or a transaction opened in the use case needs "
+        "the import and is reported with it; the application runs a transaction through TransactionBoundary. "
+        "Python has no transactional decorator the rule would let pass, so none passes. An empty list checks "
+        "nothing.",
     ),
     # --- onion -------------------------------------------------------------------------------------------------
     "DCA-ONI-001": m(AT, [IMP], "Every module in a domain package.", "It imports no module of an application package."),
@@ -123,9 +157,16 @@ MAPPING = {
     "DCA-ONI-004": m(
         AT,
         [S],
-        "Modules in a domain package. Planned: the suite does not implement it yet.",
-        "No async def, no await and no import of asyncio or concurrent.futures. The application and the adapters "
-        "are not selected.",
+        "Modules in a domain package, the shared kernel's included. Exempt from the async part: the classes that "
+        "carry the DomainGateway or the DomainService role, with their methods.",
+        "Outside the exempt classes no function is async def, no expression awaits, no async for or async with, "
+        "and no name resolves to a configured asynchronous type (async-types: typing's and collections.abc's "
+        "Awaitable, Coroutine, AsyncIterator, AsyncIterable and AsyncGenerator by default); nowhere in the domain "
+        "does an import name a configured asynchronous runtime (async-runtimes: asyncio, concurrent.futures, trio, "
+        "anyio by default). This diverges from Java and .NET, whose domain is synchronous throughout, as Rust does: "
+        "a domain gateway answers asynchronously when its adapter does, so the gateways and the domain services "
+        "that await them may be async; aggregates, entities, values, events, failures, factories and "
+        "specifications stay synchronous. The application and the adapters are not selected.",
     ),
     # --- hexagonal ---------------------------------------------------------------------------------------------
     "DCA-HEX-001": m(AT, [IMP], "Every module in a domain package.", "It imports no module of an adapter package."),
@@ -136,7 +177,7 @@ MAPPING = {
         AT,
         [S],
         "Modules in an incoming adapter package.",
-        "None names a class that carries the Repository role, protocol or implementation.",
+        "None names a class that carries the Repository role, interface or implementation.",
     ),
     "DCA-HEX-004": m(
         AT,
@@ -148,7 +189,8 @@ MAPPING = {
         AT,
         [IMP],
         "Modules in an outgoing adapter package.",
-        "None imports the infrastructure package of another context.",
+        "None imports the infrastructure package of another context; its own context's and the shared kernel's "
+        "infrastructure are shared support and pass.",
     ),
     "DCA-HEX-006": m(
         AT,
@@ -160,27 +202,27 @@ MAPPING = {
         AT,
         [IMP],
         "Modules in an incoming adapter package.",
-        "None imports a module of another context; an event consumer may import that context's api.events.",
+        "None imports a module of another context; an event consumer may import that context's events package.",
     ),
     "DCA-HEX-008": m(
         AT,
         [S],
-        "Classes, protocols excluded, whose name ends with Repository.",
+        "Classes, interfaces excluded, whose name ends with Repository.",
         "Each sits in an outgoing adapter package.",
     ),
     "DCA-HEX-009": m(
         AT,
         [S],
-        "Protocol classes in an application's shared package.",
+        "Interfaces in an application's shared package.",
         "Each carries the OutputPort role, through OutputPort, Repository, Store or a publisher.",
     ),
-    "DCA-HEX-010": m(AT, [S], "Protocol classes that carry the OutputPort role.", "None sits in a domain package."),
+    "DCA-HEX-010": m(AT, [S], "Interfaces that carry the OutputPort role.", "None sits in a domain package."),
     "DCA-HEX-011": m(
         AT,
         [S],
         "Modules in an incoming adapter package.",
-        "None names a use case - a class, no protocol, that carries the InputPort role; naming the input "
-        "port protocol is what the rule expects.",
+        "None names a use case - a class, no interface, that carries the InputPort role; naming the input "
+        "port interface is what the rule expects.",
     ),
     "DCA-HEX-012": m(
         AT, [S], "Modules in an incoming adapter package.", "None names a class that carries the DomainService role."
@@ -189,7 +231,7 @@ MAPPING = {
         AT,
         [S],
         "Modules in an outgoing adapter package.",
-        "None names a class or protocol that carries the InputPort role.",
+        "None names a class or interface that carries the InputPort role.",
     ),
     "DCA-HEX-021": m(
         RF,
@@ -209,9 +251,14 @@ MAPPING = {
     "DCA-HEX-014": m(
         RF,
         [S],
-        'Handler functions a router decorator registers for GET: <router>.get("/path") or '
-        "route/api_route with methods containing GET (FastAPI, Flask, Litestar style).",
-        "No such function constructs a class whose name ends with Command.",
+        "Handlers of GET: a function a router decorator registers - <router>.<method>(path, ...) or an imported "
+        "framework <method>(path, ...), the path a literal or any expression, route/api_route with methods containing "
+        "GET - and the get method of a class-based view (a class below a view-bases preset: Django's View, Flask's "
+        "View and MethodView, Litestar's Controller, Starlette's HTTPEndpoint).",
+        "Neither the handler nor what it calls of its own - a function of its module, a method of its view - names a "
+        "command class of the application (built, taken as a parameter or annotated: a name ending with Command), or "
+        "calls a method on an input port whose input is a command (I of its UseCase[I, O], or its execute's "
+        "parameter), held in a parameter, an annotated local or a field of the view.",
     ),
     "DCA-HEX-016": m(
         RF,
@@ -223,21 +270,32 @@ MAPPING = {
     "DCA-HEX-017": m(
         RF,
         [S],
-        "Functions registered as event listener by the configured listener decorators.",
-        "A listener that calls an input port runs after the commit in its own transaction, as the preset "
-        "expresses it. Python has no common listener decorator; without a preset nothing is selected.",
+        "Classes, interfaces excluded, that carry the EventListener role and not the TransactionalEventListener "
+        "role - a listener that reacts inside the publishing transaction; and functions a configured "
+        "listener-decorators entry registers (empty by default: Python has no common listener decorator). What "
+        "reaches an input port: a field whose annotation names a class with the InputPort role, through generic "
+        "arguments; a method parameter annotated so; any name of such a class in a method's body.",
+        "No such listener reaches an input port: a listener that drives a use case carries the "
+        "TransactionalEventListener role, so it is delivered after the commit, from the outbox, in a transaction "
+        "of its own. The two building blocks are the declaration, as Java's listener annotations are. A call "
+        "through a second class is not followed.",
     ),
     "DCA-HEX-018": m(
         RF,
         [S],
-        'Functions a router decorator registers (<router>.<method>("/path", ...)), anywhere below the base package.',
-        "Each sits in an incoming adapter package. Python handlers are functions, not classes.",
+        "The handlers anywhere below the base package: functions a router decorator registers (as DCA-HEX-014 reads "
+        "them, any HTTP method) and class-based views, once per view.",
+        "Each sits in an incoming adapter package.",
     ),
     "DCA-HEX-019": m(
         AT,
         [S],
-        "Classes, protocols excluded, that carry the OutputPort role but neither Repository nor Store.",
-        "Each sits in an outgoing adapter package; in the composition root only a bridge that drives an input port.",
+        "Classes, interfaces excluded, that carry the OutputPort role - repositories, stores and publishers "
+        "included. Not selected: a class in an infrastructure package, a context's or the composition root, that "
+        "itself drives an input port (names one in its fields, parameters or body, or calls execute) - the bridge "
+        "that hands an output port a second use case, which is wiring.",
+        "Each sits in an outgoing adapter package. DCA-TAC-015 and DCA-TAC-020 hold repositories and stores the same "
+        "way in the tactical set.",
     ),
     "DCA-HEX-020": m(
         RF,
@@ -261,7 +319,7 @@ MAPPING = {
     "DCA-TAC-002": m(
         AT,
         [S],
-        "Classes that carry the AggregateRoot role.",
+        "Classes that carry the AggregateRoot role, with the fields of their role-less bases.",
         "No field annotation, generic arguments included, names a class with the OutputPort role or a "
         "port building block.",
     ),
@@ -270,13 +328,14 @@ MAPPING = {
         [S],
         "Classes that carry the AggregateRoot role.",
         "No field annotation, through generic arguments, names another class with the AggregateRoot role. "
-        "Fields are class-level annotations and the self.<name> assignments of __init__, typed by "
-        "their annotation or by the parameter assigned.",
+        "Fields are class-level annotations and the self.<name> assignments of every method, typed by "
+        "their annotation, by the parameter assigned or by the class a call constructs; those of role-less bases "
+        "count as the class's own.",
     ),
     "DCA-TAC-004": m(
         AT,
         [M, S],
-        "Classes, protocols excluded and the most derived only, that carry the Entity role.",
+        "Classes, interfaces excluded and the most derived only, that carry the Entity role.",
         "Entity declares id as an abstract property, so an entity without it cannot be built and the "
         "type checker refuses it; the source test checks that a field, its own or a base's, holds a "
         "class with the Id role, so the identity is state, not computed.",
@@ -284,26 +343,29 @@ MAPPING = {
     "DCA-TAC-005": m(
         RF,
         [S],
-        "Every call of a class that carries the Entity role but not AggregateRoot.",
-        "It happens in a domain module of the entity's own context. Python has no package-private "
-        "constructor; the call site is what the rule reads.",
+        "Every build of a class that carries the Entity role but not AggregateRoot: a call of the class, or "
+        "dataclasses.replace / copy.replace of a parameter, an annotated local or self typed with it.",
+        "It happens inside a class that carries the AggregateRoot, Entity or Factory role in a domain module of the "
+        "entity's own context - the innermost class around the call. Python has no package-private constructor; the "
+        "call site is what the rule reads.",
     ),
     "DCA-TAC-006": m(
         AT,
         [S],
-        "Classes that carry the Entity or Value role.",
-        "No method named set_<name> takes exactly one parameter, and no property has a setter.",
+        "Classes that carry the Entity or Value role, with the methods of their role-less bases.",
+        "No method named set_<name> takes exactly one parameter and returns nothing of its class, and no property has "
+        "a setter. A fluent set_<name> - returning self or annotated to return Self - is no setter.",
     ),
     "DCA-TAC-007": m(
         AT,
         [S],
-        "Classes that carry the Entity role but not AggregateRoot.",
+        "Classes that carry the Entity role but not AggregateRoot, with the fields of their role-less bases.",
         "No field annotation, through generic arguments, names a class with the AggregateRoot role.",
     ),
     "DCA-TAC-008": m(
         AT,
         [S],
-        "Classes that carry the Value role.",
+        "Classes that carry the Value role, with the fields of their role-less bases.",
         "No field annotation, through generic arguments, names a class with the Entity role.",
     ),
     "DCA-TAC-009": m(
@@ -324,7 +386,12 @@ MAPPING = {
         "than __init__/__post_init__ that assigns to self or calls object.__setattr__.",
         title="Value Objects must not mutate their state",
     ),
-    "DCA-TAC-011": m(AT, [S], "Classes that carry the Value role.", "No method is named set_<name>."),
+    "DCA-TAC-011": m(
+        AT,
+        [S],
+        "Classes that carry the Value role, with the methods of their role-less bases.",
+        "No method is named set_<name>.",
+    ),
     "DCA-TAC-012": m(
         RF,
         [R, S],
@@ -341,20 +408,20 @@ MAPPING = {
     "DCA-TAC-014": m(
         AT,
         [S],
-        "Protocol classes that carry the Repository role.",
+        "Interfaces that carry the Repository role.",
         "Each sits in an application package, the shared kernel's included.",
     ),
     "DCA-TAC-015": m(
         AT,
         [S],
-        "Classes, protocols excluded, that carry the Repository role.",
+        "Classes, interfaces excluded, that carry the Repository role.",
         "Each sits in an outgoing adapter package. A role is nominal: an implementation names its port "
         "among its bases (DCA-PY-003).",
     ),
     "DCA-TAC-016": m(
         TC,
         [M, S],
-        "Protocol classes that carry the Repository role through Repository[A, K].",
+        "Interfaces that carry the Repository role through Repository[A, K].",
         "The bound A: AggregateRoot makes a repository for anything else a type error. The source test "
         "checks the first type argument: a class with the AggregateRoot role, and the port named after "
         "it plus Repository.",
@@ -362,29 +429,31 @@ MAPPING = {
     "DCA-TAC-017": m(
         AT,
         [S],
-        "Protocol classes that carry the Repository role.",
+        "Interfaces that carry the Repository role.",
         "No method's return annotation names a class with the Entity role but not AggregateRoot.",
     ),
     "DCA-TAC-018": m(
         AT,
         [S],
-        "Protocol classes outside adapter and infrastructure packages whose name ends with Store.",
+        "Interfaces outside every adapter (incoming and outgoing) and infrastructure package whose name ends with "
+        "Store.",
         "The class carries the Store role and not the Repository role.",
     ),
-    "DCA-TAC-019": m(AT, [S], "Protocol classes that carry the Store role.", "Each sits in an application package."),
+    "DCA-TAC-019": m(AT, [S], "Interfaces that carry the Store role.", "Each sits in an application package."),
     "DCA-TAC-020": m(
-        AT, [S], "Classes, protocols excluded, that carry the Store role.", "Each sits in an outgoing adapter package."
+        AT, [S], "Classes, interfaces excluded, that carry the Store role.", "Each sits in an outgoing adapter package."
     ),
     "DCA-TAC-021": m(
         AT,
         [S],
-        "Protocol classes that carry the Store role.",
-        "No method declared on the protocol itself is named save, delete or delete_by_id.",
+        "Interfaces that carry the Store role.",
+        "No method declared on the interface itself is named save, delete or delete_by_id.",
     ),
     "DCA-TAC-023": m(
         RF,
         [S],
-        "Every call of a class that carries the AggregateRoot role.",
+        "Every build of a class that carries the AggregateRoot role: a call of the class, or dataclasses.replace / "
+        "copy.replace of a parameter, an annotated local or self typed with it.",
         "It happens in the module that declares the root - its class methods (create, restore, ...) "
         "build it and check its invariants. Python has no private constructor; the call site is what "
         "the rule reads.",
@@ -393,36 +462,57 @@ MAPPING = {
     "DCA-TAC-024": m(
         AT,
         [S],
-        "Class methods of classes that carry the Value role.",
-        "No neutral factory (of, new, create, value_of, make) takes the same parameter types, in the same "
-        "order, as another class method. Two named origins (from_input, from_stored) pass.",
+        "Classes that carry the Value role, and their public class and static methods annotated to return the class "
+        "or Self.",
+        "No neutral factory (of, new, create, value_of, make) takes the same parameter types - resolved names, in the "
+        "same order - as another of these factories. Two named origins (from_input, from_stored) pass.",
     ),
     "DCA-TAC-025": m(
         AT,
         [S],
-        "Classes in a domain package, the shared kernel's included. Not selected: a value or "
-        "id whose one field is value, exceptions; an enum only for its members.",
-        "No field, parameter of a public method or return annotation names str, int, float, bytes, "
-        "complex, a datetime type, timedelta or uuid.UUID. A private bool field - a single yes/no fact - "
-        "and a bool return - a predicate - pass; a bool parameter and a public bool field do not. A bool "
-        "parameter of the factory that rebuilds a stored object - a class or static method annotated to "
-        "return the class or Self, named as [tool.dca] reconstituting-factories lists, reconstitute and "
-        "restore by default, case ignored - passes; its other parameters are checked. An enum class with "
-        "exactly two members that name one fact and its negation - yes/no, true/false, on/off, present/absent, "
-        "enabled/disabled, or X beside NOT_X, NO_X, NON_X or UN_X, case and underscores ignored - is reported "
-        "where it is declared: a boolean in disguise. Two members with names of their own pass.",
+        "Classes in a domain package, the shared kernel's included - their fields and their methods, private ones "
+        "included, dunders not. Not selected: a value or id with exactly one field, whatever its name; exceptions. An "
+        "enum's members are its cases, no fields; its methods are read.",
+        "No field, parameter or return annotation names str, int, float, bytes, complex, a datetime point in time "
+        "(datetime, date, time) or uuid.UUID; timedelta passes, as Java's Duration does. A private bool field - a "
+        "single yes/no fact - and a bool return - a predicate - pass; a bool parameter and a public bool field do not. "
+        "A bool parameter of the factory that rebuilds a stored object - a class or static method annotated to return "
+        "the class or Self, named as [tool.dca] reconstituting-factories lists, reconstitute and restore by default, "
+        "case ignored - passes; its other parameters are checked. An enum class with exactly two members that name one "
+        "fact and its negation - yes/no, true/false, on/off, present/absent, enabled/disabled, X beside NOT_X, NO_X or "
+        "NON_X, or an adjective-like X (ending in -ed, -able, -ible, -ive, -ent, -ant, -al, -ful) beside UN_X, case "
+        "and underscores ignored - is reported where it is declared: a boolean in disguise. LOCKED/UNLOCKED is one "
+        "fact, LOCK/UNLOCK two actions; two members with names of their own pass.",
     ),
     "DCA-TAC-026": m(
         AT,
         [S],
-        "The repository protocols that bind a class with both the Owned and the AggregateRoot "
+        "The repository interfaces that bind a class with both the Owned and the AggregateRoot "
         "role as the first type argument of Repository[A, K] (or of a narrower port).",
         "The owner id type is the type argument of Owned[...] among the aggregate's bases; a bare Owned "
-        "is reported. At least one method of the repository, inherited protocol methods included, takes "
+        "is reported. At least one method of the repository, inherited interface methods included, takes "
         "a parameter annotated with the aggregate's id type (K, or else the return of its id property) "
         "and one annotated with the owner id type, in either position, and returns an annotation that "
         "names the aggregate (itself, Optional, a list ...). A method answering bool does not count. "
         "Whether a use case calls the scoped lookup is not checked.",
+    ),
+    "DCA-TAC-027": m(
+        AT,
+        [S],
+        "Classes, interfaces excluded, that carry the AggregateRoot, Entity, Value, Factory or Specification role, "
+        "and classes whose name ends with Specification; a class that itself carries the DomainGateway role is "
+        "not selected. Read: the class body - its fields, its class-level assignments, its methods' return "
+        "annotations and their bodies. A nested class is a class of its own.",
+        "A class that names DomainGateway or carries its role, through generic arguments, appears in none of "
+        "these places: a field annotation, class-level or self.<name> in any method typed by its annotation or by "
+        "the parameter assigned; an assignment of a gateway parameter to self.<name> in any method; a class "
+        "attribute bound to a gateway; a method's return annotation; a name in a method body that hands out a "
+        "gateway without a parameter - a module variable annotated with one or bound to a built implementation, "
+        "a class attribute annotated with one, a function or method whose return annotation is one (a registry "
+        "or locator); a call that builds a class with the DomainGateway role. A gateway taken as a parameter of "
+        "__init__ or of a method and the calls made on it pass - __init__ that keeps it on self is reported for "
+        "the field. A domain service and the application may use the gateway freely. A value whose type is not "
+        "written out - an unannotated local, an untyped return - is not followed.",
     ),
     # --- strategic ---------------------------------------------------------------------------------------------
     "DCA-STR-001": m(
@@ -435,7 +525,8 @@ MAPPING = {
     "DCA-STR-003": m(
         AT,
         [IMP],
-        "Every module in a context's application package.",
+        "Every module in a context's application package. A context is a package directly below the base package; "
+        "deeper nesting is not read.",
         "It imports no module of another context, that context's api included; another context is "
         "reached through an output port.",
     ),
@@ -456,9 +547,16 @@ MAPPING = {
         AT,
         [IMP],
         "Every module in a context's adapter packages.",
-        "An import of another context names that context's api (or api.events) only.",
+        "An import of another context names that context's api or events package only.",
     ),
-    "DCA-STR-007": m(AT, [S], "Classes that carry the IntegrationEvent role.", "Each sits in an api.events package."),
+    "DCA-STR-007": m(
+        AT,
+        [S],
+        "Classes that carry the IntegrationEvent role.",
+        "Each sits in a context's events package, a sibling of its api package as Java's "
+        "{context}/events beside {context}/api; never in the shared kernel, which has no events package, "
+        "and never in api.",
+    ),
     "DCA-STR-008": m(
         RF,
         [R, S],
@@ -476,12 +574,18 @@ MAPPING = {
     "DCA-STR-011": m(
         AT,
         [S],
-        "The packages directly below the base package.",
+        "The packages directly below the base package - the only depth a bounded context is read at.",
         "At least one declares __dca__ = BoundedContext(...) in its __init__.py.",
     ),
-    "DCA-STR-012": m(AT, [S], "Every module below the base package.", "At least one sits in a DCA layer."),
+    "DCA-STR-012": m(
+        AT,
+        [S],
+        "Every module below the base package.",
+        "At least one sits in a DCA layer of a context or of the shared kernel; the composition root alone does not "
+        "count.",
+    ),
     "DCA-STR-013": m(
-        AT, [S], "Classes in an api.events package, enums excluded.", "Each carries the IntegrationEvent role."
+        AT, [S], "Classes in a context's events package, enums excluded.", "Each carries the IntegrationEvent role."
     ),
     # --- context map -------------------------------------------------------------------------------------------
     "DCA-MAP-001": m(
@@ -511,40 +615,45 @@ MAPPING = {
     "DCA-MAP-006": m(
         NA,
         [],
-        reason="Python has no second module declaration (no Spring Modulith allowedDependencies, "
-        "no Cargo.toml per context): __dca__ is the only one, and DCA-MAP-007/011 compare it with the "
-        "imports.",
+        reason="No preset yet: a second module declaration exists in Python only as a tool's own file (a uv "
+        "workspace member per context, tach.toml), and the suite reads none of them; __dca__ is the declaration, "
+        "and DCA-MAP-007/011 compare it with the imports.",
     ),
     "DCA-MAP-007": m(
         RF,
         [S, IMP],
         "Every implemented Upstream of a context's declaration.",
         "For each channel, a module of the declaring context imports the target's api (api channel) or "
-        "api.events (events channel).",
+        "events (events channel) package.",
     ),
     "DCA-MAP-008": m(
         RF,
         [IMP],
-        "Imports into another context's api by a context that declares it with Translation.ANTI_CORRUPTION_LAYER.",
-        "The api channel is imported only by the outgoing adapters, the events channel only by the incoming adapters.",
+        "Every Upstream declaration with Translation.ANTI_CORRUPTION_LAYER towards a declared context, and the imports "
+        "into that context's api or events package; an import is judged by the declaration of its channel.",
+        "Placement, whatever the status: the api channel is imported only by the outgoing adapters, the events channel "
+        "only by the incoming adapters. Presence, unless the status is PLANNED: each declared channel has a module in "
+        "the matching adapter that imports both the channel and its own context's domain or application.",
     ),
     "DCA-MAP-009": m(
         RF,
         [IMP],
-        "Imports into another context's api by a context that declares it with Translation.CONFORMIST.",
+        "Imports into another context's api or events package by a context that declares it with "
+        "Translation.CONFORMIST.",
         "None comes from a domain module.",
     ),
     "DCA-MAP-010": m(
         RF,
         [IMP],
-        "Imports of the contract_packages an ExternalUpstream names.",
+        "Imports of the contract_packages an ExternalUpstream names - the module imported or a name imported from "
+        "above it (from vendor import sdk reaches vendor.sdk).",
         "With an anti-corruption layer only the matching adapter imports them (outgoing for OUTBOUND, "
         "incoming for INBOUND); with conformist, no domain module does.",
     ),
     "DCA-MAP-011": m(
         RF,
         [IMP],
-        "Every import of a context's module into another context's api or api.events.",
+        "Every import of a context's module into another context's api or events package.",
         "The importing context declares an Upstream for that context with that channel in via.",
     ),
     "DCA-MAP-012": m(
@@ -562,16 +671,19 @@ MAPPING = {
     "DCA-MAP-014": m(
         NA,
         [],
-        reason="Python has no module declaration with allowed dependencies besides __dca__; "
-        "DCA-MAP-007 already requires every declared edge to be backed by an import.",
+        reason="No preset yet: a module declaration with allowed dependencies exists in Python only as a tool's own "
+        "file (a uv workspace member per context, tach.toml), and the suite reads none of them; DCA-MAP-007 "
+        "requires every edge __dca__ declares to be backed by an import.",
     ),
     # --- advanced ----------------------------------------------------------------------------------------------
     "DCA-ADV-001": m(
         RF,
         [R, S],
         "Classes in a domain package whose name ends with Event, and classes that carry the DomainEvent role.",
-        "A class named an event carries the DomainEvent role; an event is a frozen "
-        "dataclass by its base, holds no mutable collection and no method assigns to self.",
+        "A class named an event carries the DomainEvent role - an IntegrationEvent does not count; an event is a "
+        "frozen dataclass by its base, holds no mutable collection (its role-less bases' fields included), and no "
+        "method other than __init__, __post_init__ and __new__ assigns to self or calls object.__setattr__, nor does "
+        "the class define __setattr__.",
     ),
     "DCA-ADV-002": m(AT, [S], "Classes that carry the DomainEvent role.", "Each sits in a domain package."),
     "DCA-ADV-004": m(AT, [S], "Classes in a domain package that carry the DomainEvent role.", META_CHK),
@@ -587,13 +699,13 @@ MAPPING = {
     "DCA-ADV-006": m(
         AT,
         [S],
-        "Classes that carry the IntegrationEvent role.",
+        "Classes that carry the IntegrationEvent role, with the fields of their role-less bases.",
         "No field is named schema_version, event_version or contract_version.",
     ),
     "DCA-ADV-007": m(
         AT,
         [S],
-        "Classes that carry the DomainEvent role but not IntegrationEvent.",
+        "Classes that carry the DomainEvent role but not IntegrationEvent, with the fields of their role-less bases.",
         "No field is named schema_version, event_version or contract_version.",
     ),
     "DCA-ADV-008": m(
@@ -608,14 +720,21 @@ MAPPING = {
     "DCA-ADV-012": m(
         RF,
         [S],
-        "Classes that carry the DomainService role.",
-        "No method other than __init__ assigns to self. Python has no final field; statelessness is the "
-        "absence of mutation.",
+        "Classes that carry the DomainService role, with the methods of their role-less bases.",
+        "No method other than __init__, __post_init__ and __new__ assigns to self (directly or through an alias of "
+        "self) or calls object.__setattr__, and the class defines no __setattr__. Python has no final field; "
+        "statelessness is the absence of mutation.",
     ),
     "DCA-ADV-013": m(AT, [S], "Classes that carry the Factory role.", "The name ends with Factory."),
     "DCA-ADV-014": m(AT, [S], "Classes that carry the Factory role.", "Each sits in a domain package."),
     "DCA-ADV-015": m(AT, [S], "Classes in a domain package that carry the Factory role.", META_CHK),
-    "DCA-ADV-016": m(RF, [S], "Classes that carry the Factory role.", "No method other than __init__ assigns to self."),
+    "DCA-ADV-016": m(
+        RF,
+        [S],
+        "Classes that carry the Factory role, with the methods of their role-less bases.",
+        "No method other than __init__, __post_init__ and __new__ assigns to self (directly or through an alias of "
+        "self) or calls object.__setattr__, and the class defines no __setattr__.",
+    ),
     "DCA-ADV-017": m(
         AT,
         [S],
@@ -626,9 +745,9 @@ MAPPING = {
     "DCA-ADV-019": m(
         AT,
         [S],
-        "Methods of classes that carry the Entity or Value role.",
-        "No method calls a class with the DomainService role or a function on it. A parameter of that "
-        "type alone is not reported.",
+        "Methods of classes that carry the Entity or Value role, those of role-less bases included.",
+        "No method constructs a class with the DomainService role or calls one - on its class, on a parameter or local "
+        "that holds one (an alias included), or on self.<attribute>. Holding one alone is not reported.",
     ),
     "DCA-ADV-020": m(
         AT,
@@ -644,7 +763,8 @@ MAPPING = {
         "a class with the DomainService role, as DCA-ADV-010 selects it: roles are nominal on classes, so a module of "
         "functions is no domain service by this rule. A project without a class of that role selects nothing.",
         "No call constructs a class with the DomainService role, calls a function on it, or calls a method on a "
-        "parameter or a local or module-level name annotated with it or assigned a construction of it, on a "
+        "parameter or a local or module-level name annotated with it, assigned a construction of it or an alias of "
+        "one, on a "
         "self.<attribute> typed with it or assigned one, or on one built in place. In an infrastructure package - the "
         "context's or the project's, the composition root - a construction (the class called, or a class or static "
         "method annotated to return it) passes; a call there is reported. A parameter of that type alone is not "
@@ -652,8 +772,12 @@ MAPPING = {
     ),
     # --- use case ----------------------------------------------------------------------------------------------
     "DCA-USE-001": m(AT, [S], "Classes named InputPort below the base package.", "There is none."),
-    "DCA-USE-002": m(AT, [S], "Classes whose name ends with Command.", "Each sits in an application package."),
-    "DCA-USE-003": m(AT, [S], "Classes whose name ends with Query.", "Each sits in an application package."),
+    "DCA-USE-002": m(
+        AT, [S], "Classes whose name ends with Command, values included.", "Each sits in an application package."
+    ),
+    "DCA-USE-003": m(
+        AT, [S], "Classes whose name ends with Query, values included.", "Each sits in an application package."
+    ),
     "DCA-USE-004": m(
         RF,
         [S],
@@ -669,7 +793,8 @@ MAPPING = {
     "DCA-USE-006": m(
         AT,
         [S],
-        "Classes whose name ends with Result and that do not carry the Value role.",
+        "Classes whose name ends with Result and that do not carry the Value role - a result may be a domain value; "
+        "a Command, a Query or a Response named so is selected as a value too.",
         "Each sits in an application package.",
     ),
     "DCA-USE-007": m(
@@ -679,14 +804,17 @@ MAPPING = {
         "Each is a frozen dataclass, a NamedTuple or an enum, and holds no mutable collection. A case of a "
         "closed result need not be named ...Result; the union alias is.",
     ),
-    "DCA-USE-008": m(AT, [S], "Classes whose name ends with Response.", "Each sits in an adapter package."),
+    "DCA-USE-008": m(
+        AT, [S], "Classes whose name ends with Response, values included.", "Each sits in an adapter package."
+    ),
     "DCA-USE-009": m(
         RF,
         [S],
-        "Use cases: classes, protocols excluded, that carry the InputPort role.",
-        "A use case that calls save on an attribute typed with a Repository also calls publish or "
-        "publish_and_clear_events on an attribute typed with a DomainEventPublisher. An attribute's type "
-        "is its annotation or that of the __init__ parameter assigned to it.",
+        "Use cases: classes, interfaces excluded, that carry the InputPort role.",
+        "Each entry point - a public method - that calls save on a Repository, itself or through the methods of its "
+        "own it names on self, transitively, also reaches a call of publish_and_clear_events on a "
+        "DomainEventPublisher. A receiver is self.<attribute> (of the class or a base), a typed parameter or local, "
+        "or a local alias of one.",
     ),
     "DCA-USE-010": m(
         AT, [S], "Modules in a domain package.", "None declares or names a class whose name ends with Dto."
@@ -698,10 +826,12 @@ MAPPING = {
         RF,
         [S],
         "Use cases.",
-        "Every call of save, delete or delete_by_id on a Repository and of publish... on a "
-        "DomainEventPublisher sits inside the work the use case hands to "
-        "TransactionBoundary.in_transaction or in_transaction_closed - a lambda, a nested function or a "
-        "method of its own. The explicit boundary is the only form.",
+        "Every call of save, delete or delete_by_id on a Repository and of publish... on a DomainEventPublisher - "
+        "receivers read as DCA-USE-009 reads them - sits inside the work the use case hands to "
+        "TransactionBoundary.in_transaction or in_transaction_closed (awaited for AsyncTransactionBoundary) (a "
+        "lambda, a nested function or a method of "
+        "its own), or in a method of its own that only such work runs, transitively. A method an entry point also "
+        "runs outside the work, and one nothing runs, is outside. The explicit boundary is the only form.",
     ),
     "DCA-USE-013": m(
         NA,
@@ -722,7 +852,14 @@ MAPPING = {
         "No field annotation, through generic arguments and into other application classes, names a class "
         "with the Entity role.",
     ),
-    "DCA-USE-016": m(AT, [S], "Use cases.", "No field names a class or protocol with the InputPort role."),
+    "DCA-USE-016": m(
+        AT,
+        [S],
+        "Use cases.",
+        "None depends on another input port - in a field, a parameter, an annotated local or a name its methods "
+        "mention - directly, or through a class of its own module in the application. Its own interfaces and bases "
+        "are excluded. Messages read Caller -> Target [via Helper].",
+    ),
     "DCA-USE-017": m(AT, [S], "Use cases.", "No public method other than execute."),
     "DCA-USE-018": m(
         AT,
@@ -733,28 +870,33 @@ MAPPING = {
     "DCA-USE-019": m(
         AT,
         [S],
-        "Use cases whose execute takes a class whose name ends with Query.",
-        "No call of a write (save, delete, remove, add, insert, update, append, put, store) on a Repository "
-        "or Store attribute, and no publish on a publisher.",
+        "Use cases whose input - a parameter of execute, or I of the UseCase[I, O] they name among their bases, "
+        "transitively - is a class whose name ends with Query.",
+        "No call of a write on a Repository or Store - a method named, or starting with, save, delete, remove, add, "
+        "insert, update, upsert, put, store, write, create, append, archive, purge, clear, set or mark and an "
+        "underscore - and no call at all on a DomainEventPublisher or IntegrationEventPublisher; receivers read as "
+        "DCA-USE-009 reads them.",
     ),
     "DCA-USE-020": m(
         AT,
         [S, F],
-        "Use cases.",
+        "Every module in an application package.",
         "No call of uuid.UUID(...). Parsing happens in the adapter or in the "
         "id's own constructor; a per-directory ruff.toml (banned-api uuid.UUID) holds it while editing.",
     ),
     "DCA-USE-021": m(
         RF,
         [S],
-        "Use cases: classes, protocols excluded, that carry the InputPort role.",
-        "No method other than __init__ assigns to self. Python has no final field; statelessness is the "
-        "absence of mutation.",
+        "Use cases: classes, interfaces excluded, that carry the InputPort role, with the methods of their role-less "
+        "bases.",
+        "No method other than __init__, __post_init__ and __new__ assigns to self (directly or through an alias of "
+        "self) or calls object.__setattr__, and the class defines no __setattr__. Python has no final field; "
+        "statelessness is the absence of mutation.",
     ),
     "DCA-USE-022": m(
         AT,
         [S],
-        "Classes and protocols with the InputPort role that name UseCase[I, O] among their bases.",
+        "Classes and interfaces with the InputPort role that name UseCase[I, O] among their bases.",
         "O, or a member of a union or Optional it names, is none of int, str, bool, float, bytes. None passes - a "
         "command with nothing to answer -, and so does a container such as list[str].",
     ),
@@ -769,11 +911,15 @@ MAPPING = {
     "DCA-NAM-003": m(
         AT,
         [S],
-        "Protocol classes in an application package that carry the InputPort role.",
+        "Interfaces in an application package that carry the InputPort role.",
         "The name ends with InputPort.",
     ),
     "DCA-NAM-004": m(
-        AT, [S], "Classes in an application package whose name contains Repository.", "The name ends with Repository."
+        AT,
+        [S],
+        "Interfaces in an application package whose name contains Repository, one named exactly Repository excluded; "
+        "by name alone.",
+        "The name ends with Repository.",
     ),
     "DCA-NAM-005": m(
         NA,
@@ -792,8 +938,9 @@ MAPPING = {
     "DCA-NAM-009": m(
         AT,
         [S],
-        "Every module and package of a context and of the shared kernel.",
-        "None is named entities, entity, value_objects, valueobjects, helpers, helper, util or utils.",
+        "Every module below the base package, the composition root included.",
+        "No segment of its name below the base package - a namespace package's included - is entities, entity, "
+        "value_objects, valueobjects, helpers, helper, util or utils.",
     ),
     "DCA-NAM-010": m(
         AT, [S], "Classes in a domain package.", "No name ends with Helper, Util, Utils, Impl or Implementation."
@@ -804,16 +951,19 @@ MAPPING = {
     "DCA-NAM-012": m(
         AT,
         [S],
-        "Input ports and use cases in an application package.",
-        "Informational - lists names that start with On, After, When, Upon or Before followed by a "
-        "capital, and never fails.",
+        "Input ports and use cases in an application package: classes and interfaces with the InputPort role, and "
+        "classes whose name ends with the use-case suffix.",
+        "Informational - lists a name that, with the use-case suffix or InputPort removed, holds On, After, When, "
+        "Upon or Before at its start or after a lower-case letter or digit, followed by a capital, and never fails. "
+        "OnboardMember and SignOn are not listed.",
     ),
     "DCA-NAM-013": m(
         AT,
         [S],
-        "Input ports and use cases in an application package, and public functions of an api package.",
-        "No class name starts with Set or Update followed by a capital, and no function "
-        "name starts with set_ or update_.",
+        "Input ports and use cases in an application package (as DCA-NAM-012 selects them), and the modules of an api "
+        "package - their public functions and the public methods of their classes. The events package is not selected.",
+        "No class name, with the use-case suffix or InputPort removed, starts with Set or Update followed by a "
+        "capital, and no function or method name starts with set_ or update_.",
     ),
     # --- cycles ------------------------------------------------------------------------------------------------
     "DCA-CYC-001": m(
@@ -831,11 +981,21 @@ MAPPING = {
     "DCA-CYC-005": m(
         AT,
         [IMP],
-        "One slice per use-case or feature module or package of a context's application, the shared package excluded.",
-        "The slices import each other in no cycle.",
+        "One slice per operation root of a context's application: the deepest module or package, operation "
+        "containers skipped, that declares an input port or a use case (by role or by the use-case suffix); a "
+        "module below it joins it. A module on the way to an operation root that is none itself is the feature "
+        "slice of its first segment. The shared package and modules directly in application belong to no slice.",
+        "The slices import each other in no cycle. A package's __init__ importing a module below itself re-exports "
+        "it and is no dependency.",
     ),
     # --- errors ------------------------------------------------------------------------------------------------
-    "DCA-ERR-001": m(AT, [S], "Exception classes in a domain package.", "Each carries the DomainException role."),
+    "DCA-ERR-001": m(
+        AT,
+        [S],
+        "Exception classes in a domain package: those that extend any built-in exception (Exception, ValueError, ...) "
+        "or carry a failure role.",
+        "Each carries the DomainException role.",
+    ),
     "DCA-ERR-002": m(
         AT,
         [S],
@@ -846,7 +1006,8 @@ MAPPING = {
     "DCA-ERR-003": m(
         AT,
         [S],
-        "Exception classes in an application package that do not carry DomainException.",
+        "Exception classes in an application package - extending any built-in exception or carrying a failure role - "
+        "that do not carry DomainException.",
         "Each carries UseCaseException or OutputPortException; extending only PortException or "
         "InputPortException does not count.",
     ),
@@ -860,7 +1021,9 @@ MAPPING = {
         AT,
         [S],
         "Classes that carry DomainException or PortException.",
-        "The name contains none of Http, HTTP, StatusCode, ResponseStatus, Response.",
+        "The name contains none of Http, HTTP, StatusCode, ResponseStatus, ResponseEntity. The bare words Status and "
+        "Response are not matched: transport and domain words alike. Java's check that the name ends with none of "
+        "Error, Fault, Failure is not made: PEP 8 names an exception with the suffix Error.",
     ),
     "DCA-ERR-006": m(
         AT,
@@ -877,8 +1040,10 @@ MAPPING = {
     "DCA-ERR-007": m(
         AT,
         [S],
-        "Classes that carry DomainException or PortException, and their fields.",
-        "Informational - lists every field annotated str or with an entity, and never fails.",
+        "Classes that carry DomainException or PortException, and their fields - those of role-less bases included.",
+        "Informational - lists every field whose annotation names, containers and typing constructs looked through, "
+        "a str, an entity or any other type that is neither an id nor a value, nor a number (int, float, complex, "
+        "Decimal, Fraction), a bool, an enum or a date and time type of the standard library, and never fails.",
     ),
     "DCA-ERR-008": m(
         AT,
@@ -890,9 +1055,26 @@ MAPPING = {
     "DCA-ERR-009": m(
         AT,
         [S],
-        "Every call of a class with the DomainException role in a module outside the domain packages.",
+        "Every construction of a class with the DomainException role in a module outside the domain packages: a call "
+        "of the class, or raise naming the class itself.",
         "There is none - only the domain constructs a domain exception. Re-raising one the "
         "application caught is no construction.",
+    ),
+    "DCA-ERR-010": m(
+        AT,
+        [S],
+        "Every try statement (except* included) in a module of an application package or of an incoming adapter "
+        "package - in a module-level function or a method, nested functions included - whose try part calls a "
+        "method on a port: a parameter or an annotated local whose annotation names a class with the InputPort or "
+        "OutputPort role, a local alias of one, or self.<field> typed so (a base's field included).",
+        "No except clause of such a try names everything: a bare except:, Exception or BaseException, nor the "
+        "port failures' common base - PortException, InputPortException or a class of the project that carries "
+        "them without UseCaseException or OutputPortException; a subclass of UseCaseException or "
+        "OutputPortException, UseCaseException and OutputPortException themselves and a named domain failure "
+        "pass. A clause that cleans up and re-raises the caught failure unchanged is reported as well, as in "
+        "Java: the clean-up belongs in a finally block, the except names the failure. A try part that reaches a "
+        "port through a helper of its own, through a value whose type is not written out or through a field of a "
+        "parameter is not selected; a catch outside these layers passes.",
     ),
 }
 
@@ -929,11 +1111,12 @@ PYTHON_ONLY = [
         "declare: an output port of the application and a domain gateway of the domain alike.",
         category=AT,
         enforcement=[S],
-        selects="Protocol classes that carry the OutputPort or the DomainGateway role, and the classes of "
+        selects="Interfaces that carry the OutputPort or the DomainGateway role, and the classes of "
         "the outgoing adapters and the composition root.",
         checks="Every port is named among the bases of some class or of a narrower port; no class of the outgoing "
         "adapters or the composition root that names no port fits a port's methods, by name and parameter "
-        "names - nor the methods of a building block's port (Repository, DomainEventPublisher, TransactionBoundary). "
+        "names - nor the methods of a building block's port (Repository, DomainEventPublisher, TransactionBoundary, "
+        "AsyncTransactionBoundary). "
         "A class that names a port and fits another one by its shape is held to the port it names.",
     ),
     dict(
@@ -945,7 +1128,8 @@ PYTHON_ONLY = [
         category=AT,
         enforcement=[S],
         selects="Every module in a domain package.",
-        checks="No async def and no import of asyncio, trio or anyio.",
+        checks="No async def and no import of asyncio, trio or anyio, outside the classes that carry the "
+        "DomainGateway or the DomainService role (as DCA-ONI-004 reads it).",
     ),
     dict(
         id="DCA-PY-005",
@@ -991,8 +1175,7 @@ PYTHON_ONLY = [
         "nothing. An input port nobody names is a port the rules cannot follow to its use case.",
         category=AT,
         enforcement=[S],
-        selects="Protocol classes that carry the InputPort role, and the classes of the application with an execute "
-        "method.",
+        selects="Interfaces that carry the InputPort role, and the classes of the application with an execute method.",
         checks="Every input port is named among the bases of some class or of a narrower port; every class of the "
         "application with an execute method names an input port among its bases.",
     ),

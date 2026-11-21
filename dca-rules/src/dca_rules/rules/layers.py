@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from dca_rules.model import BB, Project, dotted_name
+import ast
+from collections.abc import Iterator
+
+from dca_rules.model import BB, Module, Project
 from dca_rules.rules import Checked, Finding, outside_imports, project_imports, rule
 
 INFRA = ("infrastructure", "root")
@@ -51,37 +54,73 @@ def lay_003(p: Project) -> Checked:
     return Checked(checked.selected, found)
 
 
-TRANSACTION_DECORATORS = ("transaction.atomic", "atomic", "transactional", "Transactional")
+def _matches(name: str, entries: tuple[str, ...]) -> bool:
+    return any(name == e or name.endswith("." + e) for e in entries if not e.startswith("."))
+
+
+#: The transaction boundary, synchronous and asynchronous: naming one is wiring (DCA-LAY-004).
+BOUNDARIES = {f"{BB}.TransactionBoundary", f"{BB}.AsyncTransactionBoundary"}
+
+
+def _transactions(p: Project, module: Module) -> Iterator[tuple[ast.AST, str, bool]]:
+    """(node, what, wiring) for every place a module touches a transaction: a transactional decorator, a transaction
+    API called or entered, and - wiring - a name of TransactionBoundary other than the base of an implementation."""
+    layout = p.layout
+    bases: set[int] = set()
+    for node in ast.walk(module.tree):
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                target = base.value if isinstance(base, ast.Subscript) else base
+                if p.resolve(module, target) in BOUNDARIES:
+                    bases.update(id(n) for n in ast.walk(base))
+    for node, name in p.refs(module, module.tree):
+        if name in BOUNDARIES and id(node) not in bases:
+            yield node, "names TransactionBoundary", True
+    methods = {e[1:] for e in layout.transaction_apis if e.startswith(".")}
+    decorators = {id(d) for n in ast.walk(module.tree) for d in getattr(n, "decorator_list", [])}
+    for node in ast.walk(module.tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for decorator in node.decorator_list:
+                name = p.resolve(module, decorator.func if isinstance(decorator, ast.Call) else decorator) or ""
+                if _matches(name, layout.transaction_decorators):
+                    yield decorator, f"declares a transaction with @{name}", False
+        elif isinstance(node, ast.Call) and id(node) not in decorators:
+            name = p.resolve(module, node.func) or ""
+            if name and _matches(name, layout.transaction_apis):
+                yield node, f"runs a transaction with {name}", False
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                call = item.context_expr
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Attribute)
+                    and call.func.attr in methods
+                    and not _matches(p.resolve(module, call.func) or "", layout.transaction_apis)
+                ):
+                    yield call, f"runs a transaction with .{call.func.attr}()", False
 
 
 @rule("DCA-LAY-004")
 def lay_004(p: Project) -> Checked:
+    """Selects every module in a layer. A transactional decorator and a transaction run in code belong to the
+    application and the outgoing adapters; naming TransactionBoundary (wiring) to those and to the composition root
+    and the shared kernel's infrastructure. An implementation of TransactionBoundary is no use of it."""
     found = []
-    selected = p.in_layer("domain", "incoming")
+    selected = [m for m in p.modules.values() if m.place.layer]
     for module in selected:
-        for node, name in p.refs(module, module.tree):
-            if name == f"{BB}.TransactionBoundary":
+        place = module.place
+        for node, what, wiring in _transactions(p, module):
+            allowed = place.layer in ("application", "outgoing") or (
+                wiring and (place.layer == "root" or (place.kernel and place.layer == "infrastructure"))
+            )
+            if not allowed:
                 found.append(
                     Finding(
                         module.where(node),
-                        f"{module.dotted} ({module.place.layer}) names "
-                        "TransactionBoundary: the transaction boundary is the application's",
+                        f"{module.dotted} ({place.layer}) {what}: the transaction boundary is the application's",
                     )
                 )
-        for item in [n for k in p.classes.values() if k.module is module for n in k.methods.values()] + [
-            n for n in module.tree.body if hasattr(n, "decorator_list")
-        ]:
-            for decorator in getattr(item, "decorator_list", []):
-                target = decorator.func if hasattr(decorator, "func") else decorator
-                name = dotted_name(target) or ""
-                if name in TRANSACTION_DECORATORS or name.endswith(".atomic"):
-                    found.append(
-                        Finding(
-                            module.where(decorator),
-                            f"{module.dotted} ({module.place.layer}) declares a transaction with @{name}",
-                        )
-                    )
-    return Checked(len(selected), found)
+    return Checked(len(selected), sorted(set(found)))
 
 
 @rule("DCA-LAY-007")
@@ -143,7 +182,8 @@ def hex_005(p: Project) -> Checked:
     selected = p.in_layer("outgoing")
     for module in selected:
         for line, target, place in project_imports(p, module):
-            if place.layer == "infrastructure" and place.owner != module.place.owner:
+            # Its own context's infrastructure and the shared kernel's are shared support; another context's is not.
+            if place.layer == "infrastructure" and place.owner != module.place.owner and not place.kernel:
                 found.append(
                     Finding(
                         module.where(line), f"{module.dotted} imports {target}, the infrastructure of {place.owner}"
@@ -171,7 +211,7 @@ def hex_007(p: Project) -> Checked:
         for line, target, place in project_imports(p, module):
             if place.context is None or place.context == module.place.context:
                 continue
-            if module.place.sub == p.layout.event and place.layer == "api" and place.sub == "events":
+            if module.place.sub == p.layout.event and place.layer == "events":
                 continue
             found.append(
                 Finding(module.where(line), f"{module.dotted} imports {target} of the context {place.context}")
@@ -236,11 +276,15 @@ def str_006(p: Project) -> Checked:
     selected = [m for m in p.in_layer(*ADAPTERS) if m.place.context is not None]
     for module in selected:
         for line, target, place in project_imports(p, module):
-            if place.context is not None and place.context != module.place.context and place.layer != "api":
+            if (
+                place.context is not None
+                and place.context != module.place.context
+                and place.layer not in ("api", "events")
+            ):
                 found.append(
                     Finding(
                         module.where(line),
-                        f"{module.dotted} imports {target}: another context is reached through its api alone",
+                        f"{module.dotted} imports {target}: another context is reached through its api and events",
                     )
                 )
     return Checked(len(selected), found)
@@ -268,6 +312,6 @@ def str_011(p: Project) -> Checked:
 @rule("DCA-STR-012")
 def str_012(p: Project) -> Checked:
     """Selects the project's package as a whole."""
-    if any(m.place.layer for m in p.modules.values()):
+    if any(m.place.layer and m.place.layer != "root" for m in p.modules.values()):
         return Checked(1, [])
     return Checked(1, [Finding(_package(p), "no module sits in a DCA layer (domain, application, adapter, ...)")])

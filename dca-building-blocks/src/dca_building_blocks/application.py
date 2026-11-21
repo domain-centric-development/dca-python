@@ -1,5 +1,5 @@
-"""Application building blocks: the transaction boundary, the port failures and the refusals a use case may answer
-with instead of raising."""
+"""Application building blocks: the transaction boundary, the port failures, the refusals a use case may answer
+with instead of raising, and the listeners that react to events - in the publishing transaction or after it."""
 
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ class Refusal:
 
     A use case answers an expected refusal in one of two styles, chosen per bounded context: it raises a named
     `UseCaseException`, or it returns the refusal as one case of a closed result, a union its caller matches over.
-    In the second style every refusing case carries this marker and a case that reports success never does:
+    The second is preferred, the first allowed. In the second style every refusing case carries this marker and a
+    case that reports success never does:
 
         @dataclass(frozen=True)
         class Reserved:
@@ -66,6 +67,30 @@ class TransactionBoundary(typing.Protocol):
             return typing.cast(T, refused.result)
 
 
+class AsyncTransactionBoundary(typing.Protocol):
+    """`TransactionBoundary` for an application whose ports are coroutines, the one an `AsyncUseCase` holds: the work
+    is a coroutine function, awaited inside the transaction."""
+
+    async def in_transaction[T](self, work: typing.Callable[[], typing.Awaitable[T]], /) -> T:
+        """Run `work` in a transaction: commit when it returns, roll back when it raises and re-raise."""
+        ...
+
+    async def in_transaction_closed[T](self, work: typing.Callable[[], typing.Awaitable[T]], /) -> T:
+        """Run `work` whose answer is a closed result: commit on a success, roll back on a failure and on a
+        returned `Refusal`, and hand the refusal back unchanged - as `TransactionBoundary.in_transaction_closed`."""
+
+        async def refusing() -> T:
+            result = await work()
+            if isinstance(result, Refusal):
+                raise _Refused(result)
+            return result
+
+        try:
+            return await self.in_transaction(refusing)
+        except _Refused as refused:
+            return typing.cast(T, refused.result)
+
+
 class PortException(Exception):
     """A failure a port's contract declares. A class extends one of the two leaves, `UseCaseException` or
     `OutputPortException`, never this one; nobody handles a port failure as such."""
@@ -85,3 +110,25 @@ class OutputPortException(PortException):
     """A failure an output port declares in its contract, beside the port in the application: the outgoing adapter
     raises it because the contract asks for it, the use case that calls the port catches it and decides the answer.
     For an expected failure the caller can answer, not for a failure of the system's own infrastructure."""
+
+
+class EventListener[E](typing.Protocol):
+    """Reacts to an event inside the transaction that publishes it: what it writes is committed with what the use case
+    saved, or rolled back with it. It reaches the output ports of that transaction - the adapters it holds are bound to
+    the open transaction, typically through a context variable the transaction boundary sets while the work runs,
+    as Java binds a transaction to the thread - and drives no input port: a use case opens a transaction of its own
+    (DCA-HEX-017)."""
+
+    def on(self, event: E, /) -> None:
+        """React to one event."""
+        ...
+
+
+class TransactionalEventListener[E](EventListener[E], typing.Protocol):
+    """Reacts to an event after the publishing transaction committed, in a transaction of its own. A listener that
+    drives an input port is of this kind (DCA-HEX-017).
+
+    The base is the declaration Python has in place of a listener annotation: it adds no method. How the delivery
+    survives a crash between the commit and the reaction - an outbox written in the publishing transaction, a relay
+    that delivers at least once, a record of what each listener received - is the adapters' concern; the record of
+    receipts is a `Store` like any other."""

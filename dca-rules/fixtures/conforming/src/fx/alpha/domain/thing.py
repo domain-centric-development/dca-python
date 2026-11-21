@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import typing
 
 from dca_building_blocks import (
     AggregateRoot,
@@ -15,11 +16,18 @@ from dca_building_blocks import (
 )
 from fx.sharedkernel.domain.owner import OwnerId
 
+if typing.TYPE_CHECKING:
+    from fx.alpha.domain.endorsement import Endorsements
+
 LIMIT = 3
 
 
 class ThingId(Id):
     value: str
+
+    def endorsed(self, endorsements: Endorsements) -> bool:
+        """A value takes the domain gateway as a parameter and calls it (DCA-TAC-027)."""
+        return endorsements.endorsed(self)
 
 
 class Side(enum.Enum):
@@ -86,6 +94,10 @@ class Thing(AggregateRoot[ThingId], Owned[OwnerId]):
     @property
     def id(self) -> ThingId:
         return self._id
+
+    def may_grow(self, endorsements: Endorsements) -> bool:
+        """An aggregate takes the domain gateway as a parameter and calls it (DCA-TAC-027)."""
+        return not self.is_full() and endorsements.endorsed(self._id)
 
     def is_full(self) -> bool:
         return len(self._parts) >= LIMIT

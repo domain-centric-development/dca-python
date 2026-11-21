@@ -1,0 +1,61 @@
+# A library with two bounded contexts - the catalogue and lending - and a shared kernel: the runnable proof that every
+# building block of dca-building-blocks is usable as documented, with the dca-rules suite green on it.
+[project]
+name = "dca-python-example"
+version = "0.0.0"
+description = "A small library application built with the DCA building blocks and checked by the DCA rule suite."
+requires-python = ">=3.12"
+dependencies = ["dca-building-blocks"]
+
+[dependency-groups]
+dev = ["dca-rules[pytest]", "pytest>=8", "mypy>=1.13", "ruff>=0.8"]
+
+[tool.uv]
+package = true
+
+[tool.uv.sources]
+dca-building-blocks = { path = "../dca-building-blocks", editable = true }
+dca-rules = { path = "../dca-rules", editable = true }
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# The layout the rule suite reads: src/library/<context>/{domain, application, adapter/{incoming,outgoing}}.
+[tool.dca]
+base-package = "library"
+experimental = "all"
+# What the library has none of, on purpose: a rule over these selects nothing, and says why instead of passing.
+allow-empty = [
+    { rule = "DCA-HEX-014", reason = "the desks are plain classes driven in-process; no web handler" },
+    { rule = "DCA-HEX-018", reason = "the desks are plain classes driven in-process; no controller" },
+    { rule = "DCA-NAM-011", reason = "no server-rendered page; no view model" },
+    { rule = "DCA-USE-008", reason = "the desks answer with cases of a union; no class named *Response" },
+    { rule = "DCA-NAM-007", reason = "the adapters translate without DTO classes" },
+    { rule = "DCA-NAM-008", reason = "the adapters translate without converter classes" },
+    { rule = "DCA-MAP-012", reason = "the catalogue and lending are upstream and downstream, not partners" },
+    { rule = "DCA-PY-001", reason = "the values, ids and events are frozen by their base; no domain class is a dataclass" },
+    { rule = "DCA-USE-003", reason = "every use case changes state; the composition root reads the stores for the tests" },
+    { rule = "DCA-USE-005", reason = "every use case changes state; no query" },
+    { rule = "DCA-USE-019", reason = "every use case changes state; no query use case" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src", "tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

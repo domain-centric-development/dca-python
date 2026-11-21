@@ -32,7 +32,7 @@ exclude = ["dca-rules/fixtures/"]
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-extend-exclude = ["dca-rules/fixtures"]
+extend-exclude = ["dca-rules/fixtures", "example"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]

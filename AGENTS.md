@@ -43,7 +43,9 @@ These hold for anyone working in any of the DCA repositories — human or agent 
 - **Roles are nominal.** A rule selects by the building blocks named among a class's bases, transitively, never by a
   structural fit; `DCA-PY-003` holds the project to it for every port the building blocks declare (output ports and
   domain gateways). Fields are class-level annotations plus the `self.<name>`
-  assignments of `__init__`, typed by their annotation or by the parameter assigned.
+  assignments of every method, typed by their annotation, the parameter assigned or the class a call constructs; a
+  rule over a class reads its role-less bases' fields and methods as its own. An interface is a `Protocol` or an
+  `abc.ABC` with abstract methods only; a nested class is a class of its own.
 - **A rule returns what it selected beside what it found** (`Checked(selected, findings)`): the selection is every
   element of the concept the rule governs, by role, layer or name. An empty selection is the outcome `empty`
   (`nothing selected`) and fails unless `[tool.dca] allow-empty` names the rule with a reason; a rule of doctrine
@@ -52,6 +54,9 @@ These hold for anyone working in any of the DCA repositories — human or agent 
   — no vocabulary of a sample.
 - **The building blocks have no dependencies.** `EventId` and `Timestamp` are their own values so a domain field
   never holds a bare `uuid.UUID` or `datetime`.
+- **`example/`** is a uv project of its own (a library application: `catalogue`, `lending`, a shared kernel): the
+  run proof that every building block is usable as documented, with the rule suite green on it. Check it like the
+  root, from `example/` (pytest, mypy, ruff); the root's ruff leaves it to its own configuration.
 - **Consumers:** the todo app the suite was proven on (outside this repository) depends on both distributions by
   path. A change to a rule runs its architecture tests there too.
 

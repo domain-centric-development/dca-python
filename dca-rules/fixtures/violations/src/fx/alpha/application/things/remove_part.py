@@ -5,6 +5,7 @@ import typing
 
 from dca_building_blocks import UseCase
 from fx.alpha.application.add_part import AddPartResult  # DCA-CYC-005
+from fx.alpha.application.things.keep_part import KeepPartCommand  # DCA-CYC-005: two use cases of one feature
 
 
 @dataclasses.dataclass(frozen=True)

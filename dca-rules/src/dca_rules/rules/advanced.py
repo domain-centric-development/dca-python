@@ -13,15 +13,44 @@ VERSION_FIELDS = ("schema_version", "event_version", "contract_version")
 
 
 def framework_metadata(p: Project, klass: Klass) -> list[tuple[ast.AST, str]]:
-    """Decorators and bases of a class that come from a configured framework."""
+    """What a class carries from a configured framework: its decorators and bases, the decorators of its methods, a
+    default a field or a method parameter takes from one (`Field(...)`, `Column(...)`, `Depends(...)`), and the
+    metadata of an `Annotated[...]` annotation."""
+    module = klass.module
     out: list[tuple[ast.AST, str]] = [(node, name) for name, node in klass.decorators if p.is_framework(name)]
     out += [(klass.node, name) for name in klass.bases if p.is_framework(p.canonical(name))]
-    for field in klass.fields:
-        node = next((n for n in klass.node.body if isinstance(n, ast.AnnAssign) and n.lineno == field.line), None)
-        if node is not None and isinstance(node.value, ast.Call):
-            name = p.resolve(klass.module, node.value.func)
+
+    def called(node: ast.expr | None) -> None:
+        if isinstance(node, ast.Call):
+            name = p.resolve(module, node.func)
             if name and p.is_framework(name):
                 out.append((node, name))
+
+    def annotated(annotation: ast.expr | None) -> None:
+        for node in ast.walk(annotation) if annotation is not None else []:
+            if isinstance(node, ast.Subscript) and (p.resolve(module, node.value) or "").endswith(".Annotated"):
+                extras = node.slice.elts[1:] if isinstance(node.slice, ast.Tuple) else []
+                for extra in extras:
+                    for ref, name in p.refs(module, extra):
+                        if p.is_framework(name):
+                            out.append((ref, name))
+
+    for statement in klass.node.body:
+        if isinstance(statement, ast.AnnAssign):
+            called(statement.value)
+            annotated(statement.annotation)
+        elif isinstance(statement, ast.Assign):
+            called(statement.value)
+    for method in klass.methods.values():
+        for decorator in method.decorator_list:
+            name = p.resolve(module, decorator.func if isinstance(decorator, ast.Call) else decorator)
+            if name and p.is_framework(name):
+                out.append((decorator, name))
+        arguments = method.args
+        for default in [*arguments.defaults, *arguments.kw_defaults]:
+            called(default)
+        for argument in parameters(method):
+            annotated(argument.annotation)
     return out
 
 
@@ -47,11 +76,11 @@ def oni_003(p: Project) -> Checked:
 
 def _immutable(p: Project, klass: Klass) -> list[Finding]:
     found = [
-        Finding(klass.module.where(f.line), f"{klass.name}.{f.name} is a mutable collection")
+        Finding(f.module.where(f.line), f"{klass.name}.{f.name} is a mutable collection")
         for f in p.mutable_fields(klass)
     ]
     found += [
-        Finding(klass.module.where(node), f"{klass.name}.{name} changes its state") for name, node in p.mutators(klass)
+        Finding(home.where(node), f"{klass.name}.{name} changes its state") for name, node, home in p.mutators(klass)
     ]
     return found
 
@@ -63,8 +92,7 @@ def adv_001(p: Project) -> Checked:
     found = [
         Finding(k.where(), f"{k.name} is named an event and does not extend DomainEvent")
         for k in named
-        if not p.roles(k) & {"DomainEvent", "IntegrationEvent"}
-        and not any(a.startswith("enum.") for a in p.ancestors(k))
+        if not p.has(k, "DomainEvent") and not any(a.startswith("enum.") for a in p.ancestors(k))
     ]
     for event in events:
         found += _immutable(p, event)
@@ -109,9 +137,9 @@ def _version_fields(p: Project, classes: list[Klass]) -> Checked:
     return Checked(
         len(classes),
         [
-            Finding(k.module.where(f.line), f"{k.name}.{f.name} carries a schema version in the payload")
+            Finding(f.module.where(f.line), f"{k.name}.{f.name} carries a schema version in the payload")
             for k in classes
-            for f in k.fields
+            for f in p.member_fields(k)
             if f.name in VERSION_FIELDS
         ],
     )
@@ -157,8 +185,8 @@ def _stateless(p: Project, role: str, what: str) -> Checked:
     selected = p.with_role(role)
     for klass in selected:
         found += [
-            Finding(klass.module.where(node), f"the {what} {klass.name} keeps state: {name} assigns to self")
-            for name, node in p.mutators(klass)
+            Finding(home.where(node), f"the {what} {klass.name} keeps state: {name} assigns to self")
+            for name, node, home in p.mutators(klass)
         ]
     return Checked(len(selected), found)
 
@@ -184,9 +212,9 @@ def adv_013(p: Project) -> Checked:
     return Checked(
         len(selected),
         [
-            Finding(k.where(), f"the factory {k.name} is not named *Factory")
+            Finding(k.where(), f"the factory {k.name} is not named *{p.layout.factory_suffix}")
             for k in selected
-            if not k.name.endswith("Factory")
+            if not k.name.endswith(p.layout.factory_suffix)
         ],
     )
 
@@ -207,7 +235,8 @@ def adv_016(p: Project) -> Checked:
 
 
 def specifications(p: Project) -> list[Klass]:
-    return [k for k in p.classes.values() if p.has(k, "Specification") or k.name.endswith("Specification")]
+    suffix = p.layout.specification_suffix
+    return [k for k in p.classes.values() if p.has(k, "Specification") or k.name.endswith(suffix)]
 
 
 @rule("DCA-ADV-017")
@@ -230,21 +259,19 @@ def adv_018(p: Project) -> Checked:
 
 @rule("DCA-ADV-019")
 def adv_019(p: Project) -> Checked:
+    """Selects the aggregates, entities and values. None constructs a domain service or calls one - on its class, on
+    a parameter or a local that holds one, or on `self.<attribute>`; holding one alone is no use."""
     found = []
     selected = [k for k in p.classes.values() if p.roles(k) & {"Entity", "Value"}]
     for klass in selected:
-        for method in klass.methods.values():
-            for node in ast.walk(method):
-                if not isinstance(node, ast.Call):
-                    continue
-                func = node.func.value if isinstance(node.func, ast.Attribute) else node.func
-                used = p.klass(klass.module, func)
-                if used is not None and p.has(used, "DomainService"):
-                    found.append(
-                        Finding(
-                            klass.module.where(node), f"{klass.name}.{method.name} uses the domain service {used.name}"
-                        )
-                    )
+        attributes = _service_attributes(p, klass)
+        for owner, name, method in p.member_methods(klass):
+            uses = _ServiceUses(p, owner.module, _service_names(p, owner.module, parameters(method)), attributes)
+            uses.read(method.body)
+            found += [
+                Finding(owner.module.where(node), f"{klass.name}.{name} {what}, a domain service")
+                for node, what, _ in uses.found
+            ]
     return Checked(len(selected), found)
 
 
@@ -312,7 +339,11 @@ class _ServiceUses:
             typed = any(self.p.has(k, "DomainService") for k in self.p.type_classes(self.module, statement.annotation))
             if typed or (statement.value is not None and self.built(statement.value) is not None):
                 self.names.add(statement.target.id)
-        elif isinstance(statement, ast.Assign) and self.built(statement.value) is not None:
+        elif isinstance(statement, ast.Assign) and (
+            self.built(statement.value) is not None
+            or (isinstance(statement.value, (ast.Name, ast.Attribute)) and self.holds(statement.value) is not None)
+        ):
+            # A construction, or an alias of a name or `self.<attribute>` that holds one.
             self.names.update(t.id for t in statement.targets if isinstance(t, ast.Name))
 
     def read(self, nodes: list[ast.stmt]) -> None:

@@ -28,6 +28,7 @@ BB_PARENTS: dict[str, tuple[str, ...]] = {
     "Store": ("OutputPort",),
     "DomainEventPublisher": ("OutputPort",),
     "IntegrationEventPublisher": ("OutputPort",),
+    "TransactionalEventListener": ("EventListener",),
     "InputPortException": ("PortException",),
     "UseCaseException": ("InputPortException",),
     "OutputPortException": ("PortException",),
@@ -37,6 +38,8 @@ STDLIB = frozenset(sys.stdlib_module_names) | {"__future__"}
 
 #: Where a class's bases mean "a protocol".
 PROTOCOL = {"typing.Protocol", "typing_extensions.Protocol"}
+#: Where a class's bases mean "an abstract base class": with abstract methods only, the interface form as well.
+ABC_BASES = {"abc.ABC"}
 
 #: Immutable shapes outside the building blocks: a frozen dataclass, a NamedTuple, an Enum.
 ENUM_BASES = {"enum.Enum", "enum.IntEnum", "enum.StrEnum", "enum.Flag", "enum.IntFlag"}
@@ -68,7 +71,7 @@ MUTABLE_TYPES = {
 @dataclasses.dataclass(frozen=True)
 class Place:
     """Where a module sits. `layer` is one of domain, application, incoming, outgoing, adapter, infrastructure, api,
-    root (the composition root), or None outside every layer."""
+    events, root (the composition root), or None outside every layer."""
 
     context: str | None = None
     kernel: bool = False
@@ -108,10 +111,14 @@ class Module:
 
 @dataclasses.dataclass
 class Field:
+    """A class-level annotation or a `self.<name>` assignment in any method; `module` is where it is written, which is
+    where its annotation resolves and where a finding about it points."""
+
     name: str
     annotation: ast.expr | None
     line: int
     public: bool
+    module: Module
 
 
 @dataclasses.dataclass
@@ -131,13 +138,43 @@ class Klass:
 
     @property
     def is_protocol(self) -> bool:
-        return any(b in PROTOCOL for b in self.bases)
+        """The interface form, Java's interface: a `typing.Protocol`, or an `abc.ABC` (or a class with the metaclass
+        `abc.ABCMeta`) whose methods are all abstract and that holds no field of its own."""
+        if any(b in PROTOCOL for b in self.bases):
+            return True
+        abstract_base = any(b in ABC_BASES for b in self.bases) or any(
+            k.arg == "metaclass" and (dotted_name(k.value) or "").rsplit(".", 1)[-1] == "ABCMeta"
+            for k in self.node.keywords
+        )
+        if not abstract_base or self.fields:
+            return False
+        return all(
+            any((dotted_name(d) or "").rsplit(".", 1)[-1] == "abstractmethod" for d in m.decorator_list)
+            for m in self.methods.values()
+        )
 
     def where(self) -> str:
         return self.module.where(self.node)
 
     def __hash__(self) -> int:
         return hash(self.qualname)
+
+
+#: Built-in types a call names: `self.items = list(...)` holds a list.
+BUILTIN_TYPES = {"list", "dict", "set", "frozenset", "tuple", "int", "str", "float", "bool", "bytes", "bytearray"}
+
+
+def _assigned_type(value: ast.expr | None, params: dict[str, ast.expr | None]) -> ast.expr | None:
+    """The type an assignment to `self.<name>` gives it without an annotation: the annotation of the parameter
+    assigned, or the class a call constructs (a capitalised name, or a built-in type)."""
+    if isinstance(value, ast.Name):
+        return params.get(value.id)
+    if isinstance(value, ast.Call):
+        name = dotted_name(value.func)
+        last = (name or "").rsplit(".", 1)[-1]
+        if name and (last[:1].isupper() or name in BUILTIN_TYPES):
+            return value.func
+    return None
 
 
 def annotation_expr(node: ast.expr | None) -> ast.expr | None:
@@ -200,9 +237,26 @@ class Project:
             self._read_imports(module)
         self.classes: dict[str, Klass] = {}
         for module in self.modules.values():
-            for node in module.tree.body:
-                if isinstance(node, ast.ClassDef):
-                    self.classes[f"{module.dotted}.{node.name}"] = self._klass(module, node)
+            self._collect(module, module.tree.body, module.dotted)
+
+    def _collect(self, module: Module, body: list[ast.stmt], prefix: str) -> None:
+        """Every class of a module, a nested one as a class of its own: `<module>.Outer.Inner` in a class body,
+        `<module>.function.<locals>.Inner` in a function's, as Python's own `__qualname__` names them."""
+        for node in body:
+            if isinstance(node, ast.ClassDef):
+                qualname = f"{prefix}.{node.name}"
+                self.classes[qualname] = self._klass(module, node, qualname)
+                self._collect(module, node.body, qualname)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self._collect(module, node.body, f"{prefix}.{node.name}.<locals>")
+            elif isinstance(node, (ast.If, ast.Try, ast.With, ast.For, ast.While)):
+                inner = [
+                    *node.body,
+                    *getattr(node, "orelse", []),
+                    *getattr(node, "finalbody", []),
+                    *(s for h in getattr(node, "handlers", []) for s in h.body),
+                ]
+                self._collect(module, inner, prefix)
 
     # --- places ------------------------------------------------------------------------------------------------
 
@@ -283,7 +337,10 @@ class Project:
             return Place(context, kernel, "domain")
         if layer == layout.application:
             shared = bool(below) and below[0] == layout.shared
-            feature = () if shared else tuple(below)
+            grouped = list(below)
+            while grouped and grouped[0] in layout.operation_containers:
+                grouped.pop(0)
+            feature = () if shared else tuple(grouped)
             return Place(context, kernel, "application", shared=shared, feature=feature)
         if layer == layout.adapter:
             if below and below[0] == layout.incoming:
@@ -295,8 +352,11 @@ class Project:
         if layer == layout.infrastructure:
             return Place(context, kernel, "infrastructure")
         if layer == layout.api:
-            sub = "events" if below and below[0] == layout.events else None
-            return Place(context, kernel, "api", sub=sub)
+            return Place(context, kernel, "api")
+        if layer == layout.events:
+            # Beside api, as Java keeps {context}/events beside {context}/api: a consumer of the events depends on
+            # the contract alone. The kernel has no events package; DCA-STR-007 reports one.
+            return Place(context, kernel, "events")
         return Place(context, kernel)
 
     # --- imports and names -------------------------------------------------------------------------------------
@@ -429,7 +489,7 @@ class Project:
 
     # --- classes and roles -------------------------------------------------------------------------------------
 
-    def _klass(self, module: Module, node: ast.ClassDef) -> Klass:
+    def _klass(self, module: Module, node: ast.ClassDef, qualname: str) -> Klass:
         bases = []
         for base in node.bases:
             base = base.value if isinstance(base, ast.Subscript) else base
@@ -448,14 +508,17 @@ class Project:
             if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
                 if "ClassVar" in ast.unparse(item.annotation):
                     continue
-                fields.append(Field(item.target.id, item.annotation, item.lineno, not item.target.id.startswith("_")))
+                fields.append(
+                    Field(item.target.id, item.annotation, item.lineno, not item.target.id.startswith("_"), module)
+                )
             elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 methods[item.name] = item
-        init = methods.get("__init__")
-        if init is not None:
-            params = {a.arg: a.annotation for a in init.args.args + init.args.kwonlyargs}
-            known = {f.name for f in fields}
-            for stmt in ast.walk(init):
+        known = {f.name for f in fields}
+        # `__init__` first, then every other method: a field is where the object first holds it.
+        ordered = sorted(methods.values(), key=lambda m: m.name != "__init__")
+        for method in ordered:
+            params = {a.arg: a.annotation for a in method.args.args + method.args.kwonlyargs}
+            for stmt in ast.walk(method):
                 targets: list[ast.expr] = []
                 annotation: ast.expr | None = None
                 if isinstance(stmt, ast.Assign):
@@ -469,14 +532,14 @@ class Project:
                         and target.value.id == "self"
                         and target.attr not in known
                     ):
-                        value = getattr(stmt, "value", None)
-                        if annotation is None and isinstance(value, ast.Name):
-                            annotation = params.get(value.id)
+                        typed = annotation or _assigned_type(getattr(stmt, "value", None), params)
                         known.add(target.attr)
                         fields.append(
-                            Field(target.attr, annotation, getattr(stmt, "lineno", 1), not target.attr.startswith("_"))
+                            Field(
+                                target.attr, typed, getattr(stmt, "lineno", 1), not target.attr.startswith("_"), module
+                            )
                         )
-        klass = Klass(f"{module.dotted}.{node.name}", node.name, module, node, [], [], fields, methods)
+        klass = Klass(qualname, node.name, module, node, [], [], fields, methods)
         klass.bases = [self._resolve_late(module, b) for b in bases]
         klass.decorators = [(self._resolve_late(module, n), d) for n, d in decorators]
         return klass
@@ -532,6 +595,48 @@ class Project:
                         todo.append(self.classes[base])
         return out
 
+    def lineage(self, klass: Klass) -> list[Klass]:
+        """The project classes a class extends, transitively, nearest first."""
+        out: list[Klass] = []
+        todo = list(self.base_classes(klass))
+        while todo:
+            current = todo.pop(0)
+            if current is klass or current in out:
+                continue
+            out.append(current)
+            todo += self.base_classes(current)
+        return out
+
+    def members(self, klass: Klass) -> list[Klass]:
+        """The class and the project bases it extends that carry no building block, transitively: their fields and
+        methods are the class's own as far as a rule over it goes. A base that carries a role is selected, and
+        checked, by itself."""
+        return [klass, *(b for b in self.lineage(klass) if not self.roles(b))]
+
+    def member_fields(self, klass: Klass) -> list[Field]:
+        """The fields of the class and of its role-less bases, a name once, the nearest declaration."""
+        out: dict[str, Field] = {}
+        for owner in self.members(klass):
+            for field in owner.fields:
+                out.setdefault(field.name, field)
+        return list(out.values())
+
+    def member_methods(self, klass: Klass) -> list[tuple[Klass, str, ast.FunctionDef | ast.AsyncFunctionDef]]:
+        """(owner, name, method) for the methods of the class and of its role-less bases, an override once."""
+        out: dict[str, tuple[Klass, str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+        for owner in self.members(klass):
+            for name, method in owner.methods.items():
+                out.setdefault(name, (owner, name, method))
+        return list(out.values())
+
+    def all_fields(self, klass: Klass) -> list[Field]:
+        """The fields of the class and of every project class it extends, a name once: what `self.<name>` holds."""
+        out: dict[str, Field] = {}
+        for owner in [klass, *self.lineage(klass)]:
+            for field in owner.fields:
+                out.setdefault(field.name, field)
+        return list(out.values())
+
     def has(self, klass: Klass, role: str) -> bool:
         return role in self.roles(klass)
 
@@ -568,24 +673,30 @@ class Project:
         )
 
     def mutable_fields(self, klass: Klass) -> list[Field]:
-        """Fields whose type is a mutable collection (list, dict, set, ...), the shallow part of immutability."""
+        """Fields whose type is a mutable collection (list, dict, set, ...), the shallow part of immutability; the
+        fields of role-less bases included."""
         out = []
-        for field in klass.fields:
-            names = set(self.type_names(klass.module, field.annotation))
+        for field in self.member_fields(klass):
+            names = set(self.type_names(field.module, field.annotation))
             if names & MUTABLE_TYPES:
                 out.append(field)
         return out
 
-    def mutators(self, klass: Klass) -> list[tuple[str, ast.AST]]:
-        """Methods other than `__init__`/`__post_init__` that assign to `self.<attr>` or call `object.__setattr__`,
-        and a `__setattr__` of its own."""
-        out: list[tuple[str, ast.AST]] = []
-        for name, method in klass.methods.items():
+    def mutators(self, klass: Klass) -> list[tuple[str, ast.AST, Module]]:
+        """(method, node, its module) for the methods other than `__init__`/`__post_init__` that assign to
+        `self.<attr>` - directly or through a local alias of `self` - or call `object.__setattr__`, and a
+        `__setattr__` of its own; the methods of role-less bases included."""
+        out: list[tuple[str, ast.AST, Module]] = []
+        for owner, name, method in self.member_methods(klass):
             if name in ("__init__", "__post_init__", "__new__"):
                 continue
             if name == "__setattr__":
-                out.append((name, method))
+                out.append((name, method, owner.module))
                 continue
+            selves = {"self"}
+            for node in ast.walk(method):
+                if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name) and node.value.id in selves:
+                    selves.update(t.id for t in node.targets if isinstance(t, ast.Name))
             for node in ast.walk(method):
                 targets: list[ast.expr] = []
                 if isinstance(node, ast.Assign):
@@ -593,13 +704,13 @@ class Project:
                 elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
                     targets = [node.target]
                 if any(
-                    isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id == "self"
+                    isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name) and t.value.id in selves
                     for t in targets
                 ):
-                    out.append((name, node))
+                    out.append((name, node, owner.module))
                     break
                 if isinstance(node, ast.Call) and dotted_name(node.func) == "object.__setattr__":
-                    out.append((name, node))
+                    out.append((name, node, owner.module))
                     break
         return out
 
@@ -611,18 +722,63 @@ class Project:
         return self.roles(klass) if klass is not None else frozenset()
 
     def self_types(self, klass: Klass) -> dict[str, frozenset[str]]:
-        """{attribute: the roles its annotation names} for `self.<attribute>`."""
+        """{attribute: the roles its annotation names} for `self.<attribute>`, the attributes a base holds included."""
         out: dict[str, frozenset[str]] = {}
-        for field in klass.fields:
+        for field in self.all_fields(klass):
             roles: frozenset[str] = frozenset()
-            for name in self.type_names(klass.module, field.annotation):
+            for name in self.type_names(field.module, field.annotation):
                 roles |= self.name_roles(name)
             out[field.name] = roles
         return out
 
+    def scope_types(self, klass: Klass | None, module: Module, scope: ast.AST) -> dict[str, frozenset[str]]:
+        """{local name: the roles it holds} in a function or method, nested functions included: a parameter or a
+        local annotated with a role, a local bound to `self.<attribute>` or to another such name (an alias)."""
+        fields = self.self_types(klass) if klass is not None else {}
+        out: dict[str, frozenset[str]] = {}
+
+        def typed(annotation: ast.expr | None) -> frozenset[str]:
+            roles: frozenset[str] = frozenset()
+            for name in self.type_names(module, annotation):
+                roles |= self.name_roles(name)
+            return roles
+
+        for node in ast.walk(scope):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for argument in parameters(node):
+                    roles = typed(argument.annotation)
+                    if roles:
+                        out[argument.arg] = roles
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                roles = typed(node.annotation)
+                if roles:
+                    out[node.target.id] = roles
+        changed = True
+        while changed:
+            changed = False
+            for node in ast.walk(scope):
+                if not isinstance(node, (ast.Assign, ast.NamedExpr)):
+                    continue
+                value = node.value
+                held: frozenset[str] = frozenset()
+                if isinstance(value, ast.Attribute) and isinstance(value.value, ast.Name) and value.value.id == "self":
+                    held = fields.get(value.attr, frozenset())
+                elif isinstance(value, ast.Name):
+                    held = out.get(value.id, frozenset())
+                if not held:
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name) and out.get(target.id) != held:
+                        out[target.id] = held
+                        changed = True
+        return out
+
     def calls(self, klass: Klass, method: ast.AST) -> Iterator[tuple[ast.Call, str, frozenset[str]]]:
-        """(call, method name, the roles of its receiver) for every `self.<attr>.<method>(...)` call."""
+        """(call, method name, the roles of its receiver) for every call on `self.<attr>` - an attribute of the class
+        or of a base - and on a local that holds a role: a typed parameter or local, or an alias of one."""
         types = self.self_types(klass)
+        names = self.scope_types(klass, klass.module, method)
         for node in ast.walk(method):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 receiver = node.func.value
@@ -632,6 +788,8 @@ class Project:
                     and receiver.value.id == "self"
                 ):
                     yield node, node.func.attr, types.get(receiver.attr, frozenset())
+                elif isinstance(receiver, ast.Name) and receiver.id in names:
+                    yield node, node.func.attr, names[receiver.id]
 
     def constructions(self, module: Module, node: ast.AST | None = None) -> Iterator[tuple[ast.Call, Klass]]:
         """Every call of a project class (a construction), in a module or below a node."""

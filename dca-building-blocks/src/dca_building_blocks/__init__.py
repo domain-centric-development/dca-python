@@ -6,10 +6,13 @@ nothing else.
 """
 
 from dca_building_blocks.application import (
+    AsyncTransactionBoundary,
+    EventListener,
     InputPortException,
     OutputPortException,
     PortException,
     Refusal,
+    TransactionalEventListener,
     TransactionBoundary,
     UseCaseException,
 )
@@ -54,6 +57,7 @@ from dca_building_blocks.tactical import (
 
 __all__ = [
     "AggregateRoot",
+    "AsyncTransactionBoundary",
     "AsyncUseCase",
     "BoundedContext",
     "Consumes",
@@ -64,6 +68,7 @@ __all__ = [
     "DomainService",
     "Entity",
     "EventId",
+    "EventListener",
     "ExternalUpstream",
     "Factory",
     "Id",
@@ -86,6 +91,7 @@ __all__ = [
     "Store",
     "Timestamp",
     "TransactionBoundary",
+    "TransactionalEventListener",
     "Translation",
     "Upstream",
     "UseCase",

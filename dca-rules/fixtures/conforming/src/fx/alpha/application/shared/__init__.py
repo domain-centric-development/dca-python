@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import abc
 from typing import Protocol
 
 from dca_building_blocks import OutputPortException, Repository, Store
@@ -27,3 +28,14 @@ class BetaLookup(Store, Protocol):
 
 class BetaUnavailable(OutputPortException):
     pass
+
+
+class RepositoryUnavailable(OutputPortException):
+    """A failure named after the repository it concerns: no repository port (DCA-NAM-004 selects interfaces)."""
+
+
+class Ledger(Store, abc.ABC):
+    """An abstract base class with abstract methods only is a port, as a Protocol is (DCA-TAC-020, DCA-HEX-019)."""
+
+    @abc.abstractmethod
+    def entries(self) -> int: ...

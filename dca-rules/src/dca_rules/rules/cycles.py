@@ -6,13 +6,20 @@ from collections.abc import Callable
 
 from dca_rules.model import Module, Place, Project
 from dca_rules.rules import Checked, Finding, project_imports, rule
+from dca_rules.rules.hexagonal import is_use_case
 
 Slice = Callable[[Place], str | None]
 
 
-def cycles(p: Project, slice_of: Slice, what: str) -> Checked:
+def cycles(
+    p: Project,
+    slice_of: Slice,
+    what: str,
+    skip: Callable[[Module, str], bool] | None = None,
+) -> Checked:
     """Every cycle between slices, each once; the finding names the import that closes it. Selects the modules that
-    fall into a slice."""
+    fall into a slice. `skip` leaves out an import that is no dependency between slices."""
+
     edges: dict[str, dict[str, tuple[Module, int]]] = {}
     selected = 0
     for module in p.modules.values():
@@ -20,8 +27,10 @@ def cycles(p: Project, slice_of: Slice, what: str) -> Checked:
         if source is None:
             continue
         selected += 1
-        for line, _target, place in project_imports(p, module):
-            target = slice_of(place)
+        for line, target_name, target_place in project_imports(p, module):
+            if skip is not None and skip(module, target_name):
+                continue
+            target = slice_of(target_place)
             if target is not None and target != source:
                 edges.setdefault(source, {}).setdefault(target, (module, line))
     found, seen = [], set()
@@ -67,9 +76,28 @@ def cyc_004(p: Project) -> Checked:
 
 @rule("DCA-CYC-005")
 def cyc_005(p: Project) -> Checked:
+    """One slice per operation root: the deepest module or package of an application, operation containers skipped,
+    that declares an input port or a use case (by role or by the use-case suffix); a module below it joins it. A
+    module on the way to an operation root that is none itself is the feature slice of its first segment. A package's
+    `__init__` that imports a module below itself re-exports it: no dependency."""
+    roots: dict[str | None, set[tuple[str, ...]]] = {}
+    for klass in p.classes_in("application"):
+        if klass.place.shared or not klass.place.feature:
+            continue
+        if p.has(klass, "InputPort") or is_use_case(p, klass) or klass.name.endswith(p.layout.use_case_suffix):
+            roots.setdefault(klass.place.owner, set()).add(klass.place.feature)
+
     def slice_of(place: Place) -> str | None:
         if place.layer != "application" or place.shared or not place.feature:
             return None
-        return f"{place.owner}.{place.feature[0]}"
+        ops = roots.get(place.owner, set())
+        feature = place.feature
+        deepest = max((r for r in ops if feature[: len(r)] == r), key=len, default=None)
+        if deepest is None and any(len(r) > 1 and r[0] == feature[0] for r in ops):
+            deepest = feature[:1]
+        return f"{place.owner}.{'.'.join(deepest)}" if deepest else None
 
-    return cycles(p, slice_of, "feature")
+    def reexport(module: Module, target: str) -> bool:
+        return module.is_package and target.startswith(module.dotted + ".")
+
+    return cycles(p, slice_of, "feature", skip=reexport)

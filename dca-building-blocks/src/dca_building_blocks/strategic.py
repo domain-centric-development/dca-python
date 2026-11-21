@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import dataclasses
 import enum
+import typing
 
 
 class Translation(enum.Enum):
@@ -103,7 +104,21 @@ class SharedKernel:
 
 class OpenHostService:
     """Marks a published interface another bounded context may call: it sits in the context's `api` package or in
-    an incoming adapter. A class extends it; an open host service of functions declares its package instead, as a
-    context does - `__dca__ = OpenHostService()` in the package's `__init__.py`."""
+    an incoming adapter. The context it belongs to is the package it sits in; what it offers, in the context's
+    language, is its description. A class extends it; an open host service of functions declares its package
+    instead, as a context does:
 
-    __slots__ = ()
+        class CatalogueDesk(OpenHostService, description="registers titles and acquires copies"): ...
+
+        __dca__ = OpenHostService(description="registers titles and acquires copies")  # a package's __init__.py
+    """
+
+    __slots__ = ("description",)
+    DESCRIPTION: typing.ClassVar[str] = ""
+
+    def __init_subclass__(cls, *, description: str = "", **kwargs: typing.Any) -> None:
+        super().__init_subclass__(**kwargs)
+        cls.DESCRIPTION = description
+
+    def __init__(self, description: str = "") -> None:
+        self.description = description or type(self).DESCRIPTION

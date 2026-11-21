@@ -149,22 +149,31 @@ BB_PORTS = {
     "Repository": {"find_by_id", "save", "delete_by_id"},
     "DomainEventPublisher": {"publish"},
     "TransactionBoundary": {"in_transaction"},
+    "AsyncTransactionBoundary": {"in_transaction"},
 }
 BB_PORT_FAMILY = {
     "Repository": {"Repository"},
     "DomainEventPublisher": {"DomainEventPublisher", "IntegrationEventPublisher"},
-    "TransactionBoundary": {"TransactionBoundary"},
+    "TransactionBoundary": {"TransactionBoundary", "AsyncTransactionBoundary"},
+    "AsyncTransactionBoundary": {"TransactionBoundary", "AsyncTransactionBoundary"},
 }
 
 
 @rule("DCA-PY-004")
 def py_004(p: Project) -> Checked:
-    """The domain stays synchronous."""
+    """The domain stays synchronous, its domain gateways and domain services aside: a gateway answers asynchronously
+    when its adapter does, and a service that awaits it is async too (as DCA-ONI-004 reads it)."""
     found = []
     selected = p.in_layer("domain")
     for module in selected:
+        exempt = {
+            id(n)
+            for k in p.classes.values()
+            if k.module is module and (p.has(k, "DomainGateway") or p.has(k, "DomainService"))
+            for n in ast.walk(k.node)
+        }
         for node in ast.walk(module.tree):
-            if isinstance(node, ast.AsyncFunctionDef):
+            if isinstance(node, ast.AsyncFunctionDef) and id(node) not in exempt:
                 found.append(
                     Finding(
                         module.where(node), f"{module.dotted}.{node.name} is a coroutine; async is the ports' concern"

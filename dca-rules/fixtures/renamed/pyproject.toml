@@ -1,0 +1,17 @@
+# Every package name and suffix renamed: the rules follow the configuration (Java's DcaLayout with...Subpackage and
+# with...Suffix). Read, never run.
+[tool.dca]
+base-package = "fx"
+experimental = "all"
+incoming = "driving"
+outgoing = "driven"
+shared = "common"
+web = "pages"
+operation-containers = ["usecases"]
+use-case-suffix = "Service"
+input-port-suffix = "Port"
+aggregate-root-suffix = "Root"
+repository-suffix = "Repo"
+store-suffix = "Records"
+factory-suffix = "Maker"
+specification-suffix = "Rule"

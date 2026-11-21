@@ -28,7 +28,8 @@ class UseCase[I, O](InputPort, typing.Protocol):
 
 
 class AsyncUseCase[I, O](InputPort, typing.Protocol):
-    """`UseCase` for an application whose ports are coroutines. The domain stays synchronous."""
+    """`UseCase` for an application whose ports are coroutines; it runs its transaction through an
+    `AsyncTransactionBoundary`. The domain stays synchronous, its gateways and domain services aside."""
 
     async def execute(self, command: I, /) -> O:
         """Run the use case."""

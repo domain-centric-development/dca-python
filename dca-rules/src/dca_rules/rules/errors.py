@@ -3,23 +3,31 @@
 from __future__ import annotations
 
 import ast
+import builtins
+from collections.abc import Iterator
 
-from dca_rules.model import BB, Klass, Module, Project
+from dca_rules.model import BB, Klass, Module, Project, annotation_expr
 from dca_rules.rules import Checked, Finding, rule
 from dca_rules.rules.advanced import framework_metadata
 from dca_rules.rules.hexagonal import named_classes
 
 PORT_FAILURES = {"UseCaseException", "OutputPortException"}
 CLASSIFICATION = {"PortException", "InputPortException"}
-TRANSPORT = ("Http", "HTTP", "StatusCode", "ResponseStatus", "Response")
+TRANSPORT = ("Http", "HTTP", "StatusCode", "ResponseStatus", "ResponseEntity")
+
+
+def _builtin_exception(name: str) -> bool:
+    """`builtins.ValueError`, `builtins.KeyError`, ...: an exception class of the standard library's builtins."""
+    if not name.startswith("builtins."):
+        return False
+    found = getattr(builtins, name.removeprefix("builtins."), None)
+    return isinstance(found, type) and issubclass(found, BaseException)
 
 
 def is_exception(p: Project, klass: Klass) -> bool:
-    ancestors = p.ancestors(klass)
-    return (
-        "builtins.Exception" in ancestors
-        or "builtins.BaseException" in ancestors
-        or bool(p.roles(klass) & {"DomainException", "PortException"})
+    """A class that extends any built-in exception (`Exception`, `ValueError`, ...) or carries a failure role."""
+    return any(_builtin_exception(a) for a in p.ancestors(klass)) or bool(
+        p.roles(klass) & {"DomainException", "PortException"}
     )
 
 
@@ -179,20 +187,51 @@ def err_006(p: Project) -> Checked:
     return Checked(selected, found)
 
 
+#: What a failure may carry beside ids and values: numbers, yes/no, points and spans of time, and what holds them.
+CARRIED = {
+    "builtins.int",
+    "builtins.float",
+    "builtins.bool",
+    "builtins.complex",
+    "decimal.Decimal",
+    "fractions.Fraction",
+    "datetime.datetime",
+    "datetime.date",
+    "datetime.time",
+    "datetime.timedelta",
+    "builtins.None",
+    "None",
+}
+CONTAINERS = {"builtins.list", "builtins.tuple", "builtins.set", "builtins.frozenset", "builtins.dict", "builtins.type"}
+
+
+def _carried(p: Project, name: str) -> bool:
+    """A type a failure may carry: an id or a value, an enum, a number, a point or span of time - or a container or a
+    typing construct, which is looked through."""
+    if name in CARRIED or name in CONTAINERS or name.startswith(("typing.", "collections.abc.")):
+        return True
+    roles = p.name_roles(name)
+    if roles & {"Id", "Value"}:
+        return True
+    klass = p.classes.get(name)
+    return klass is not None and any(a.startswith("enum.") for a in p.ancestors(klass))
+
+
 @rule("DCA-ERR-007")
 def err_007(p: Project) -> Checked:
+    """Informational: lists every field of a failure that carries a string, an entity or any other type that is no id,
+    no value, no number, no enum and no date or time - containers looked through; the fields of role-less bases
+    included."""
     found = []
     selected = failures(p)
     for failure in selected:
-        for field in failure.fields:
-            names = p.type_names(failure.module, field.annotation)
-            held = [n.rsplit(".", 1)[-1] for n in names if n == "builtins.str"] + [
-                k.name for k in p.type_classes(failure.module, field.annotation) if p.has(k, "Entity")
-            ]
+        for field in p.member_fields(failure):
+            names = p.type_names(field.module, annotation_expr(field.annotation))
+            held = sorted({n.rsplit(".", 1)[-1] for n in names if not _carried(p, n)})
             if held:
                 found.append(
                     Finding(
-                        failure.module.where(field.line),
+                        field.module.where(field.line),
                         f"{failure.name}.{field.name} carries {', '.join(held)}; carry ids and figures",
                     )
                 )
@@ -222,12 +261,102 @@ def err_009(p: Project) -> Checked:
     for module in p.modules.values():
         if module.place.layer == "domain":
             continue
-        for call, klass in p.constructions(module):
+        built: list[tuple[ast.AST, Klass]] = list(p.constructions(module))
+        # `raise Gone` raises the class: Python constructs it.
+        for node in ast.walk(module.tree):
+            if isinstance(node, ast.Raise) and isinstance(node.exc, (ast.Name, ast.Attribute)):
+                klass = p.klass(module, node.exc)
+                if klass is not None:
+                    built.append((node, klass))
+        for node, klass in built:
             if p.has(klass, "DomainException"):
                 found.append(
                     Finding(
-                        module.where(call),
+                        module.where(node),
                         f"{module.dotted} constructs the domain exception {klass.name}; only the domain does",
                     )
                 )
     return Checked(len(p.with_role("DomainException")), found)
+
+
+CATCH_ALL = {"builtins.Exception", "builtins.BaseException"}
+PORTS = {"InputPort", "OutputPort"}
+
+
+def _scopes(p: Project, module: Module) -> Iterator[tuple[ast.FunctionDef | ast.AsyncFunctionDef, Klass | None]]:
+    """Every module-level function and every method of a class of the module, with its class."""
+    for statement in module.tree.body:
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield statement, None
+    for klass in p.classes.values():
+        if klass.module is module:
+            for method in klass.methods.values():
+                yield method, klass
+
+
+def _port_call(
+    body: list[ast.stmt], names: dict[str, frozenset[str]], fields: dict[str, frozenset[str]]
+) -> ast.Call | None:
+    """The first call in a try part of a method on a port: a parameter or annotated local, or `self.<field>`."""
+    for statement in body:
+        for node in ast.walk(statement):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            receiver = node.func.value
+            if isinstance(receiver, ast.Name) and names.get(receiver.id):
+                return node
+            if (
+                isinstance(receiver, ast.Attribute)
+                and isinstance(receiver.value, ast.Name)
+                and receiver.value.id == "self"
+                and fields.get(receiver.attr, frozenset()) & PORTS
+            ):
+                return node
+    return None
+
+
+def _catches_all(p: Project, module: Module, handler: ast.ExceptHandler) -> str | None:
+    """What a handler catches that is every failure, or the port failures' common base; None when it names its
+    failures."""
+    if handler.type is None:
+        return "everything (a bare except)"
+    caught = list(handler.type.elts) if isinstance(handler.type, ast.Tuple) else [handler.type]
+    for node in caught:
+        name = p.resolve(module, node) or ""
+        if name in CATCH_ALL:
+            return name.removeprefix("builtins.")
+        roles = p.name_roles(name)
+        if "PortException" in roles and not roles & {"OutputPortException", "UseCaseException"}:
+            return name.rsplit(".", 1)[-1]
+    return None
+
+
+@rule("DCA-ERR-010")
+def err_010(p: Project) -> Checked:
+    """Selects every try statement in the application and the incoming adapters whose try part calls a method on an
+    input or output port."""
+    selected = 0
+    found = []
+    for module in p.in_layer("application", "incoming"):
+        for scope, klass in _scopes(p, module):
+            names = {n: roles & PORTS for n, roles in p.scope_types(klass, module, scope).items() if roles & PORTS}
+            fields = p.self_types(klass) if klass is not None else {}
+            for node in ast.walk(scope):
+                if not isinstance(node, (ast.Try, ast.TryStar)):
+                    continue
+                call = _port_call(node.body, names, fields)
+                if call is None:
+                    continue
+                selected += 1
+                target = ast.unparse(call.func)
+                for handler in node.handlers:
+                    caught = _catches_all(p, module, handler)
+                    if caught is not None:
+                        found.append(
+                            Finding(
+                                module.where(handler),
+                                f"{scope.name} catches {caught} around {target}; catch the failure the port "
+                                "declares by its own type",
+                            )
+                        )
+    return Checked(selected, sorted(set(found)))

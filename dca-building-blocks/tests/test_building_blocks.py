@@ -2,22 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import datetime
+import typing
 import uuid
 from collections.abc import Callable
 
 import pytest
 from dca_building_blocks import (
     AggregateRoot,
+    AsyncTransactionBoundary,
     DomainEvent,
     DomainEventPublisher,
     Entity,
     EventId,
+    EventListener,
     Id,
     IntegrationEvent,
+    OpenHostService,
     Refusal,
     Timestamp,
+    TransactionalEventListener,
     TransactionBoundary,
     Value,
 )
@@ -165,3 +171,55 @@ def test_a_failure_still_rolls_back() -> None:
 def test_entity_is_abstract() -> None:
     with pytest.raises(TypeError):
         Entity()  # type: ignore[abstract]
+
+
+class ThingCreated(DomainEvent):
+    event_id: EventId
+    occurred_on: Timestamp
+
+
+class Shelver(TransactionalEventListener[ThingCreated]):
+    def __init__(self) -> None:
+        self.shelved = 0
+
+    def on(self, event: ThingCreated, /) -> None:
+        self.shelved += 1
+
+
+def test_a_transactional_listener_is_an_event_listener() -> None:
+    listener: EventListener[ThingCreated] = Shelver()
+    listener.on(ThingCreated(EventId(uuid.uuid4()), Timestamp(datetime.datetime.now(datetime.UTC))))
+    assert isinstance(listener, Shelver) and listener.shelved == 1
+
+
+class AsyncRecording(AsyncTransactionBoundary):
+    def __init__(self) -> None:
+        self.log: list[str] = []
+
+    async def in_transaction[T](self, work: Callable[[], typing.Awaitable[T]], /) -> T:
+        try:
+            result = await work()
+        except BaseException:
+            self.log.append("rollback")
+            raise
+        self.log.append("commit")
+        return result
+
+
+def test_an_async_refusal_rolls_back_and_comes_back_as_the_answer() -> None:
+    boundary = AsyncRecording()
+
+    async def refuse() -> Done | Taken:
+        return Taken(3)
+
+    assert asyncio.run(boundary.in_transaction_closed(refuse)) == Taken(3)
+    assert boundary.log == ["rollback"]
+
+
+def test_an_open_host_service_says_what_it_offers() -> None:
+    class Desk(OpenHostService, description="registers titles"):
+        pass
+
+    assert Desk.DESCRIPTION == "registers titles"
+    assert Desk().description == "registers titles"
+    assert OpenHostService(description="lends copies").description == "lends copies"
