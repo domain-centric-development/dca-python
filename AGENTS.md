@@ -49,7 +49,8 @@ These hold for anyone working in any of the DCA repositories — human or agent 
 - **A rule returns what it selected beside what it found** (`Checked(selected, findings)`): the selection is every
   element of the concept the rule governs, by role, layer or name. An empty selection is the outcome `empty`
   (`nothing selected`) and fails unless `[tool.dca] allow-empty` names the rule with a reason, or the project holds
-  no production code yet (`Project.holds_production_code`, the predicate DCA-STR-011/012 use too); a rule of doctrine
+  no production code yet (`Project.holds_production_code`, the predicate DCA-STR-011/012 use too: a module that
+  only starts the program, `model.is_entry_point`, is none); a rule of doctrine
   alone registers with `doctrine=True`. The conforming fixture's `allow-empty` names exactly what it lacks.
 - **Fixtures** are read, never imported or run; they name contexts `alpha` … `zeta` and types like `Thing` and `Part`
   — no vocabulary of a sample.

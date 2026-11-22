@@ -17,7 +17,8 @@ green would say it held. A project that has none of a concept on purpose says so
     allow-empty = [{ rule = "DCA-ADV-013", reason = "the model builds every aggregate through its own class" }]
 
 A project that holds no production code yet - no module below the base package holds a statement besides its
-docstring - has nothing to select: every empty selection passes there, with `NO_PRODUCTION_CODE` as its reason.
+docstring, a module that only starts the program (`model.is_entry_point`) aside - has nothing to select: every empty
+selection passes there, with `NO_PRODUCTION_CODE` as its reason.
 """
 
 from __future__ import annotations
@@ -54,7 +55,9 @@ def catalogue() -> dict[str, Entry]:
 
 
 #: The reason an empty selection passes on a project without production code, without `allow-empty`.
-NO_PRODUCTION_CODE = "the project holds no production code yet - no module below the base package holds a statement"
+NO_PRODUCTION_CODE = (
+    "the project holds no production code yet - no module below the base package that does more than start the program"
+)
 
 
 @dataclasses.dataclass(frozen=True)

@@ -84,9 +84,12 @@ allow-empty = [
 ]
 ```
 
-A project that holds no production code yet - no module below the base package holds a statement besides its
-docstring - has nothing to select: there every empty selection passes without `allow-empty`, and the suite is green.
-Once one such statement exists, an empty selection fails again.
+A project that holds no production code yet has nothing to select: there every empty selection passes without
+`allow-empty`, and the suite is green. It holds none while no module below the base package holds a statement besides
+its docstring, a program entry point aside - a module whose statements are a docstring, imports, at most one function
+named `main` and the `if __name__ == "__main__":` guard that only calls or raises (a `__main__` module may call at the
+top level too), the shape `uv init --package` writes. Once one other statement exists, an empty selection fails
+again.
 
 Every package name and suffix the suite places or selects by is renamed in the same table, as Java's `DcaLayout`
 renames packages and suffixes; each value is one identifier, and one that is none fails the load:

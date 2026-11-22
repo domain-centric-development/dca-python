@@ -402,6 +402,54 @@ def test_the_whole_suite_passes_on_a_project_without_production_code(tmp_path: p
         assert done.returncode == 0, done.stdout + done.stderr
 
 
+GENERATED = {
+    "__init__.py": 'def main() -> None:\n    print("Hello from fx!")\n',
+    "__main__.py": 'from fx import main\n\nif __name__ == "__main__":\n    main()\n',
+}
+
+
+def test_the_whole_suite_passes_on_a_generated_package(tmp_path: pathlib.Path) -> None:
+    project = _project(tmp_path, GENERATED)
+    (tmp_path / "pyproject.toml").write_text('[tool.dca]\nbase-package = "fx"\n')
+    assert not project.holds_production_code
+    assert not [rule_id for rule_id in implemented() if run(project, rule_id).fails]
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_architecture.py").write_text(
+        'from dca_rules.testing import architecture_tests\n\ntest_dca = architecture_tests("pyproject.toml")\n'
+    )
+    for command in (["-m", "dca_rules", "pyproject.toml"], ["-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"]):
+        done = subprocess.run([sys.executable, *command], cwd=tmp_path, capture_output=True, text=True, check=False)
+        assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_one_real_type_beside_the_generated_main_is_production_code(tmp_path: pathlib.Path) -> None:
+    project = _project(tmp_path, {**GENERATED, "greeting.py": "class Greeting:\n    pass\n"})
+    assert project.holds_production_code
+    assert findings(project, "DCA-STR-011")
+    assert findings(project, "DCA-STR-012")
+    assert run(project, "DCA-NAM-007").fails
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def main():\n    pass\n\n\ndef helper():\n    pass\n",
+        "GREETING = 'hello'\n",
+        "class Main:\n    pass\n",
+        'def main():\n    pass\n\n\nif __name__ == "__main__":\n    main()\nelse:\n    pass\n',
+        "main()\n",
+    ],
+)
+def test_anything_beside_main_is_production_code(tmp_path: pathlib.Path, source: str) -> None:
+    assert _project(tmp_path, {"__init__.py": source}).holds_production_code
+
+
+def test_a_main_module_may_start_the_program_at_the_top_level(tmp_path: pathlib.Path) -> None:
+    source = '"""Run the program."""\n\nimport sys\n\nfrom fx import main\n\nsys.exit(main())\n'
+    assert not _project(tmp_path, {"__main__.py": source}).holds_production_code
+
+
 def test_an_empty_selection_still_fails_once_the_project_has_code(tmp_path: pathlib.Path) -> None:
     project = _project(tmp_path, {"plain.py": "class Plain:\n    pass\n"})
     outcome = run(project, "DCA-NAM-007")

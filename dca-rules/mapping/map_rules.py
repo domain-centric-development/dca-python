@@ -575,21 +575,28 @@ MAPPING = {
         AT,
         [S],
         "The packages directly below the base package - the only depth a bounded context is read at.",
-        "At least one declares __dca__ = BoundedContext(...) in its __init__.py. A project that holds no production "
-        "code yet passes: no module below the base package holds a statement besides its docstring - an empty "
-        "__init__.py is no code; tests outside the package are not read, tests inside it count as code. Once one "
-        "such statement exists, the rule fails until a context is declared, so a base package or a layout that "
-        "misses the declarations still fails.",
+        "At least one declares __dca__ = BoundedContext(...) in its __init__.py. "
+        "A project that holds no production code yet passes. It holds none while no module below the base package "
+        "holds a statement besides its docstring, a program entry point aside: an empty __init__.py is no code, nor "
+        "is a module whose statements are a docstring, imports, at most one function named main and the guard if "
+        "__name__ == '__main__': whose body only calls or raises (a module named __main__ may call or raise at the "
+        "top level as well); tests outside the package are not read, tests inside it count as code. "
+        "Once one such statement exists, the rule fails until a context is declared, so a base package or a layout "
+        "that misses the declarations still fails.",
     ),
     "DCA-STR-012": m(
         AT,
         [S],
         "Every module below the base package.",
         "At least one sits in a DCA layer of a context or of the shared kernel; the composition root alone does not "
-        "count. A project that holds no production code yet passes: no module below the base package holds a "
-        "statement besides its docstring - an empty __init__.py is no code; tests outside the package are not read, "
-        "tests inside it count as code. Once one such statement exists, the rule fails until a module sits in a "
-        "layer, so a layout that misses the existing code still fails.",
+        "count. "
+        "A project that holds no production code yet passes. It holds none while no module below the base package "
+        "holds a statement besides its docstring, a program entry point aside: an empty __init__.py is no code, nor "
+        "is a module whose statements are a docstring, imports, at most one function named main and the guard if "
+        "__name__ == '__main__': whose body only calls or raises (a module named __main__ may call or raise at the "
+        "top level as well); tests outside the package are not read, tests inside it count as code. "
+        "Once one such statement exists, the rule fails until a module sits in a layer, so a layout that misses the "
+        "existing code still fails.",
     ),
     "DCA-STR-013": m(
         AT, [S], "Classes in a context's events package, enums excluded.", "Each carries the IntegrationEvent role."

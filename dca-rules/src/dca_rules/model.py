@@ -308,14 +308,15 @@ class Project:
 
     @functools.cached_property
     def holds_production_code(self) -> bool:
-        """Whether a module below the base package holds a statement besides its docstring. An empty `__init__.py`,
-        or one with a docstring alone, is no production code yet; tests outside the package are not read, tests
-        inside it count."""
+        """Whether a module below the base package holds production code: a statement besides its docstring, in a
+        module that is not a program entry point (`is_entry_point`). An empty `__init__.py`, or one with a docstring
+        alone, is no production code yet, nor is the `main` a project generator writes; tests outside the package
+        are not read, tests inside it count."""
         for module in self.modules.values():
             body = module.tree.body
             if body and ast.get_docstring(module.tree, clean=False) is not None:
                 body = body[1:]
-            if body:
+            if body and not is_entry_point(module):
                 return True
         return False
 
@@ -872,3 +873,48 @@ def parameters(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.arg
     args = function.args
     found = args.posonlyargs + args.args + args.kwonlyargs + [a for a in (args.vararg, args.kwarg) if a]
     return [a for a in found if a.arg not in ("self", "cls")]
+
+
+def is_entry_point(module: Module) -> bool:
+    """Whether the module only starts the program - the shape a project generator writes before any production code
+    exists. Its statements are a docstring, imports, at most one function named `main`, and the guard
+    `if __name__ == "__main__":` whose body only calls (expression statements) or raises (`raise SystemExit(...)`);
+    a module named `__main__`, which runs only as the program, may call or raise at the top level as well. Every
+    other statement - a class, a second function, an assignment - makes it production code."""
+    main_module = module.dotted.rpartition(".")[2] == "__main__"
+    functions = 0
+    for node in module.tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            continue
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main":
+            functions += 1
+            continue
+        if _is_main_guard(node) or (main_module and _only_starts(node)):
+            continue
+        return False
+    return functions <= 1
+
+
+def _is_main_guard(node: ast.stmt) -> bool:
+    """`if __name__ == "__main__":` with no else, whose body only calls or raises."""
+    if not isinstance(node, ast.If) or node.orelse:
+        return False
+    test = node.test
+    return (
+        isinstance(test, ast.Compare)
+        and isinstance(test.left, ast.Name)
+        and test.left.id == "__name__"
+        and len(test.ops) == 1
+        and isinstance(test.ops[0], ast.Eq)
+        and len(test.comparators) == 1
+        and isinstance(test.comparators[0], ast.Constant)
+        and test.comparators[0].value == "__main__"
+        and all(_only_starts(statement) for statement in node.body)
+    )
+
+
+def _only_starts(node: ast.stmt) -> bool:
+    """A call as a statement (`main()`, `sys.exit(main())`) or a raise (`raise SystemExit(main())`)."""
+    return (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)) or isinstance(node, ast.Raise)
