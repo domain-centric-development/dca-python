@@ -294,10 +294,22 @@ def _package(p: Project) -> str:
     return str(p.layout.package_dir.relative_to(p.layout.project_root))
 
 
+def _holds_production_code(p: Project) -> bool:
+    """Whether a module below the base package holds a statement besides its docstring: an empty `__init__.py`, or one
+    with a docstring alone, is no production code yet."""
+    for module in p.modules.values():
+        body = module.tree.body
+        if body and ast.get_docstring(module.tree, clean=False) is not None:
+            body = body[1:]
+        if body:
+            return True
+    return False
+
+
 @rule("DCA-STR-011")
 def str_011(p: Project) -> Checked:
-    """Selects the project's package as a whole."""
-    if p.declared_contexts():
+    """Selects the project's package as a whole; a project without production code passes."""
+    if p.declared_contexts() or not _holds_production_code(p):
         return Checked(1, [])
     return Checked(
         1,
@@ -311,7 +323,7 @@ def str_011(p: Project) -> Checked:
 
 @rule("DCA-STR-012")
 def str_012(p: Project) -> Checked:
-    """Selects the project's package as a whole."""
-    if any(m.place.layer and m.place.layer != "root" for m in p.modules.values()):
+    """Selects the project's package as a whole; a project without production code passes."""
+    if any(m.place.layer and m.place.layer != "root" for m in p.modules.values()) or not _holds_production_code(p):
         return Checked(1, [])
     return Checked(1, [Finding(_package(p), "no module sits in a DCA layer (domain, application, adapter, ...)")])

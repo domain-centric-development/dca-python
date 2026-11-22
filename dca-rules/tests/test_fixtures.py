@@ -379,6 +379,19 @@ def test_the_composition_root_alone_is_no_dca_layer(tmp_path: pathlib.Path) -> N
     assert findings(project, "DCA-STR-012")
 
 
+def test_a_project_without_production_code_passes_the_declaration_guards(tmp_path: pathlib.Path) -> None:
+    project = _project(tmp_path, {"__init__.py": '"""Nothing here yet."""\n', "sub/__init__.py": ""})
+    for rule_id in ("DCA-STR-011", "DCA-STR-012"):
+        outcome = run(project, rule_id)
+        assert outcome.kind == "ran" and not outcome.findings, (rule_id, outcome)
+
+
+def test_one_statement_is_production_code_the_declaration_guards_see(tmp_path: pathlib.Path) -> None:
+    project = _project(tmp_path, {"__init__.py": '"""Something here."""\n\nx = 1\n'})
+    assert findings(project, "DCA-STR-011")
+    assert findings(project, "DCA-STR-012")
+
+
 def test_an_implemented_anti_corruption_layer_has_its_translator() -> None:
     found = [f.message for f in findings(fixture("violations"), "DCA-MAP-008")]
     assert any(m.startswith("alpha declares epsilon via events behind an anti-corruption layer") for m in found)

@@ -575,14 +575,21 @@ MAPPING = {
         AT,
         [S],
         "The packages directly below the base package - the only depth a bounded context is read at.",
-        "At least one declares __dca__ = BoundedContext(...) in its __init__.py.",
+        "At least one declares __dca__ = BoundedContext(...) in its __init__.py. A project that holds no production "
+        "code yet passes: no module below the base package holds a statement besides its docstring - an empty "
+        "__init__.py is no code; tests outside the package are not read, tests inside it count as code. Once one "
+        "such statement exists, the rule fails until a context is declared, so a base package or a layout that "
+        "misses the declarations still fails.",
     ),
     "DCA-STR-012": m(
         AT,
         [S],
         "Every module below the base package.",
         "At least one sits in a DCA layer of a context or of the shared kernel; the composition root alone does not "
-        "count.",
+        "count. A project that holds no production code yet passes: no module below the base package holds a "
+        "statement besides its docstring - an empty __init__.py is no code; tests outside the package are not read, "
+        "tests inside it count as code. Once one such statement exists, the rule fails until a module sits in a "
+        "layer, so a layout that misses the existing code still fails.",
     ),
     "DCA-STR-013": m(
         AT, [S], "Classes in a context's events package, enums excluded.", "Each carries the IntegrationEvent role."
