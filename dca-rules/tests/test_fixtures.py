@@ -450,6 +450,16 @@ def test_a_main_module_may_start_the_program_at_the_top_level(tmp_path: pathlib.
     assert not _project(tmp_path, {"__main__.py": source}).holds_production_code
 
 
+def test_a_port_of_one_use_case_used_by_another_is_reported() -> None:
+    found = [f.message for f in findings(fixture("violations"), "DCA-USE-023")]
+    assert any(
+        m.startswith("the output port Source is declared in the use case alpha.install and used by alpha.check")
+        for m in found
+    )
+    assert not any("OwnLog" in m for m in found)
+    assert not findings(fixture("conforming"), "DCA-USE-023")
+
+
 def test_an_empty_selection_still_fails_once_the_project_has_code(tmp_path: pathlib.Path) -> None:
     project = _project(tmp_path, {"plain.py": "class Plain:\n    pass\n"})
     outcome = run(project, "DCA-NAM-007")

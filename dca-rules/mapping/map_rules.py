@@ -914,6 +914,17 @@ MAPPING = {
         "O, or a member of a union or Optional it names, is none of int, str, bool, float, bytes. None passes - a "
         "command with nothing to answer -, and so does a container such as list[str].",
     ),
+    "DCA-USE-023": m(
+        AT,
+        [S],
+        "Every output port of the application layer: a Protocol or an abstract class with the OutputPort role among "
+        "its bases. A use case module is the deepest module or package of an application that declares an input port "
+        "or a use case (by role or by the use-case suffix), operation containers skipped, and everything below it.",
+        "A port declared in a use case module is named - imported or referenced - by no module of another use case "
+        "module. Ports in the shared package, in a feature package or directly in the application package pass; "
+        "adapters and modules outside a use case module are not counted. The selection is every output port, so a "
+        "project without one selects nothing.",
+    ),
     # --- naming ------------------------------------------------------------------------------------------------
     "DCA-NAM-001": m(AT, [S], "Use cases in an application package.", "The name ends with UseCase."),
     "DCA-NAM-002": m(

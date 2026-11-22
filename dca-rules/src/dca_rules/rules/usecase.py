@@ -539,3 +539,46 @@ def use_022(p: Project) -> Checked:
                     )
                 )
     return Checked(len(selected), found)
+
+
+@rule("DCA-USE-023")
+def use_023(p: Project) -> Checked:
+    """Selects every output port of the application layer, by role: a Protocol or an abstract class with the
+    OutputPort role among its bases. A use case module is the deepest module or package of an application that
+    declares an input port or a use case (by role or by the use-case suffix), operation containers skipped, and
+    everything below it. A port declared in one is reported when a module of another names it."""
+    roots: dict[str | None, set[tuple[str, ...]]] = {}
+    for klass in p.classes_in("application"):
+        if klass.place.shared or not klass.place.feature:
+            continue
+        if p.has(klass, "InputPort") or is_use_case(p, klass) or klass.name.endswith(p.layout.use_case_suffix):
+            roots.setdefault(klass.place.owner, set()).add(klass.place.feature)
+
+    def use_case_of(module: Module) -> str | None:
+        place = module.place
+        if place.layer != "application" or place.shared or not place.feature:
+            return None
+        deepest = max((r for r in roots.get(place.owner, set()) if place.feature[: len(r)] == r), key=len, default=None)
+        return f"{place.owner}.{'.'.join(deepest)}" if deepest else None
+
+    ports = [k for k in p.with_role("OutputPort") if k.place.layer == "application" and k.is_protocol]
+    homes = {k.qualname: use_case_of(k.module) for k in ports}
+    users: dict[str, set[str]] = {}
+    for module in p.in_layer("application"):
+        user = use_case_of(module)
+        if user is None:
+            continue
+        named = {name for _, name in p.refs(module, module.tree)}
+        named.update(a for item in module.imports for a in item.absolute)
+        for qualname, home in homes.items():
+            if home is not None and home != user and qualname in named:
+                users.setdefault(qualname, set()).add(user)
+    found = [
+        Finding(
+            p.classes[q].where(),
+            f"the output port {p.classes[q].name} is declared in the use case {homes[q]} and used by "
+            f"{', '.join(sorted(u))}; a port used by several use cases belongs in the shared package",
+        )
+        for q, u in sorted(users.items())
+    ]
+    return Checked(len(ports), found)
