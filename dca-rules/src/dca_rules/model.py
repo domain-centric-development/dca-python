@@ -306,6 +306,19 @@ class Project:
                 out.append((module, call))
         return out
 
+    @functools.cached_property
+    def holds_production_code(self) -> bool:
+        """Whether a module below the base package holds a statement besides its docstring. An empty `__init__.py`,
+        or one with a docstring alone, is no production code yet; tests outside the package are not read, tests
+        inside it count."""
+        for module in self.modules.values():
+            body = module.tree.body
+            if body and ast.get_docstring(module.tree, clean=False) is not None:
+                body = body[1:]
+            if body:
+                return True
+        return False
+
     def declared_contexts(self) -> dict[str, str]:
         """{package: declared name} of the contexts that carry a BoundedContext declaration."""
         out = {}

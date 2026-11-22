@@ -15,6 +15,9 @@ green would say it held. A project that has none of a concept on purpose says so
 
     [tool.dca]
     allow-empty = [{ rule = "DCA-ADV-013", reason = "the model builds every aggregate through its own class" }]
+
+A project that holds no production code yet - no module below the base package holds a statement besides its
+docstring - has nothing to select: every empty selection passes there, with `NO_PRODUCTION_CODE` as its reason.
 """
 
 from __future__ import annotations
@@ -50,12 +53,16 @@ def catalogue() -> dict[str, Entry]:
     return out
 
 
+#: The reason an empty selection passes on a project without production code, without `allow-empty`.
+NO_PRODUCTION_CODE = "the project holds no production code yet - no module below the base package holds a statement"
+
+
 @dataclasses.dataclass(frozen=True)
 class Outcome:
     """What running one rule produced: `ran` with findings over a selection of `selected` elements (an informational
     rule never fails); `empty` when the selection held nothing, so the rule held over nothing - `allowed` carries the
-    project's reason when `[tool.dca] allow-empty` names the rule; or why it did not run - `experimental` (not
-    switched on) or `disabled`."""
+    project's reason when `[tool.dca] allow-empty` names the rule, or `NO_PRODUCTION_CODE` when there is no code yet;
+    or why it did not run - `experimental` (not switched on) or `disabled`."""
 
     kind: typing.Literal["ran", "empty", "experimental", "disabled"]
     findings: tuple[Finding, ...] = ()
@@ -89,6 +96,8 @@ def run(project: Project, rule_id: str) -> Outcome:
     informational = entry.status == "informational"
     allowed = project.layout.allowed_empty(rule_id)
     if checked.selected == 0 and not findings and rule_id not in DOCTRINE:
+        if allowed is None and not project.holds_production_code:
+            allowed = NO_PRODUCTION_CODE
         return Outcome("empty", (), informational, 0, allowed)
     return Outcome("ran", findings, informational, checked.selected, allowed)
 
@@ -114,6 +123,7 @@ def report(rule_id: str, outcome: Outcome) -> str:
 
 
 __all__ = [
+    "NO_PRODUCTION_CODE",
     "Checked",
     "DcaLayout",
     "Entry",

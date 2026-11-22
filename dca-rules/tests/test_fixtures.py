@@ -14,7 +14,7 @@ import subprocess
 import sys
 
 import pytest
-from dca_rules import Finding, catalogue, implemented, report, run
+from dca_rules import NO_PRODUCTION_CODE, Finding, catalogue, implemented, report, run
 from dca_rules.layout import DcaLayout
 from dca_rules.model import Project
 
@@ -384,6 +384,28 @@ def test_a_project_without_production_code_passes_the_declaration_guards(tmp_pat
     for rule_id in ("DCA-STR-011", "DCA-STR-012"):
         outcome = run(project, rule_id)
         assert outcome.kind == "ran" and not outcome.findings, (rule_id, outcome)
+
+
+def test_the_whole_suite_passes_on_a_project_without_production_code(tmp_path: pathlib.Path) -> None:
+    project = _project(tmp_path, {"__init__.py": '"""Nothing here yet."""\n'})
+    (tmp_path / "pyproject.toml").write_text('[tool.dca]\nbase-package = "fx"\n')
+    failing = [rule_id for rule_id in implemented() if run(project, rule_id).fails]
+    assert not failing
+    assert run(project, "DCA-NAM-007").allowed == NO_PRODUCTION_CODE
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_architecture.py").write_text(
+        'from dca_rules.testing import architecture_tests\n\ntest_dca = architecture_tests("pyproject.toml")\n'
+    )
+    for command in (["-m", "dca_rules", "pyproject.toml"], ["-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"]):
+        done = subprocess.run([sys.executable, *command], cwd=tmp_path, capture_output=True, text=True, check=False)
+        assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_an_empty_selection_still_fails_once_the_project_has_code(tmp_path: pathlib.Path) -> None:
+    project = _project(tmp_path, {"plain.py": "class Plain:\n    pass\n"})
+    outcome = run(project, "DCA-NAM-007")
+    assert outcome.kind == "empty" and outcome.allowed is None and outcome.fails
 
 
 def test_one_statement_is_production_code_the_declaration_guards_see(tmp_path: pathlib.Path) -> None:
